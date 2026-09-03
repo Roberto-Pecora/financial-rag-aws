@@ -37,10 +37,20 @@ _KEYWORD_FIELDS = (
 )
 
 
+def _hnsw_params() -> tuple[str, int, int, int]:
+    """HNSW engine + build/search knobs from env (accuracy-for-latency dials)."""
+    engine = os.getenv("HNSW_ENGINE", "lucene")  # lucene is current; nmslib deprecated
+    ef_construction = int(os.getenv("HNSW_EF_CONSTRUCTION", "256"))
+    m = int(os.getenv("HNSW_M", "16"))
+    ef_search = int(os.getenv("HNSW_EF_SEARCH", "256"))  # higher -> nearer exact recall
+    return engine, ef_construction, m, ef_search
+
+
 def build_index_body(dim: int) -> dict[str, Any]:
     """Index mapping: a knn_vector for dense search plus text and keyword fields."""
+    engine, ef_construction, m, ef_search = _hnsw_params()
     return {
-        "settings": {"index": {"knn": True}},
+        "settings": {"index": {"knn": True, "knn.algo_param.ef_search": ef_search}},
         "mappings": {
             "properties": {
                 "text": {"type": "text"},
@@ -50,7 +60,8 @@ def build_index_body(dim: int) -> dict[str, Any]:
                     "method": {
                         "name": "hnsw",
                         "space_type": "cosinesimil",
-                        "engine": "nmslib",
+                        "engine": engine,
+                        "parameters": {"ef_construction": ef_construction, "m": m},
                     },
                 },
                 **{f: {"type": "keyword"} for f in _KEYWORD_FIELDS},
@@ -62,8 +73,11 @@ def build_index_body(dim: int) -> dict[str, Any]:
 
 
 def knn_query(vector: list[float], top_k: int, metadata_filter: dict[str, Any] | None) -> dict:
-    q: dict[str, Any] = {"knn": {"vector": {"vector": vector, "k": top_k}}}
-    return _wrap_filter(q, metadata_filter, top_k)
+    # Query-time ef_search (method_parameters) needs OpenSearch >= 2.16; the index
+    # setting above covers older versions.
+    _, _, _, ef_search = _hnsw_params()
+    knn = {"vector": vector, "k": top_k, "method_parameters": {"ef_search": ef_search}}
+    return _wrap_filter({"knn": {"vector": knn}}, metadata_filter, top_k)
 
 
 def bm25_query(query: str, top_k: int, metadata_filter: dict[str, Any] | None) -> dict:

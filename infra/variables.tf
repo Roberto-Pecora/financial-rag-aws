@@ -37,5 +37,5 @@ variable "opensearch_volume_gb" {
 variable "engine_version" {
   description = "OpenSearch engine version."
   type        = string
-  default     = "OpenSearch_2.11"
+  default     = "OpenSearch_2.17"
 }

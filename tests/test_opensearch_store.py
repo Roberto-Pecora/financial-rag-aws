@@ -65,10 +65,14 @@ def _hit(doc_id, text, score):
 # --------------------------------------------------------------------------
 
 
-def test_build_index_body_sets_knn_dim():
+def test_build_index_body_sets_knn_dim_and_hnsw_knobs():
     body = sos.build_index_body(384)
     assert body["settings"]["index"]["knn"] is True
+    assert body["settings"]["index"]["knn.algo_param.ef_search"] == 256
     assert body["mappings"]["properties"]["vector"]["dimension"] == 384
+    method = body["mappings"]["properties"]["vector"]["method"]
+    assert method["engine"] == "lucene"  # current engine, not deprecated nmslib
+    assert method["parameters"]["ef_construction"] == 256 and method["parameters"]["m"] == 16
     assert body["mappings"]["properties"]["ingest_path"]["type"] == "keyword"
 
 
@@ -77,6 +81,8 @@ def test_query_builders_exclude_vector_and_apply_filter():
     assert q["_source"]["excludes"] == ["vector"]
     assert q["size"] == 5
     assert {"term": {"ticker": "AAPL"}} in q["query"]["bool"]["must"]
+
+    assert q["query"]["bool"]["must"][0]["knn"]["vector"]["method_parameters"]["ef_search"] == 256
 
     b = sos.bm25_query("revenue", top_k=3, metadata_filter=None)
     assert b["query"]["match"]["text"]["query"] == "revenue"

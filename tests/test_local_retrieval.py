@@ -45,3 +45,22 @@ def test_evaluate_index_scores_with_harness():
 def test_empty_corpus_returns_no_hits():
     idx = lr.LocalDenseIndex([], _FakeEmbedder())
     assert idx.search("anything") == []
+
+
+def test_index_is_exact_matches_bruteforce_argmax():
+    """Eval index is exact (no ANN loss): its top hit is the true cosine argmax."""
+    emb = _FakeEmbedder()
+    idx = lr.LocalDenseIndex(_CORPUS, emb)
+    q = "regulatory risk"
+    top = idx.search(q, top_k=1)[0]
+
+    # brute-force reference over the same vectors
+    qv = emb.encode(q)
+    qv = qv / np.linalg.norm(qv)
+    best, best_sim = None, -1e9
+    for r in _CORPUS:
+        v = emb.encode(r["text"])
+        sim = float((v / np.linalg.norm(v)) @ qv)
+        if sim > best_sim:
+            best, best_sim = r["metadata"]["doc_id"], sim
+    assert top["metadata"]["doc_id"] == best
