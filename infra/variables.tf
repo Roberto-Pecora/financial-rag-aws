@@ -11,9 +11,9 @@ variable "profile" {
 }
 
 variable "bucket_name" {
-  description = "S3 bucket for the data lake (corpus, artifacts, eval). Must be globally unique."
+  description = "S3 data-lake bucket. Must be globally unique — set to frag-datalake-<your-account-id>."
   type        = string
-  default     = "frag-datalake-452575447847"
+  default     = "frag-datalake-changeme"
 }
 
 variable "domain_name" {
