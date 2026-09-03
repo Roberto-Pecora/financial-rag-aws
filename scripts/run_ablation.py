@@ -35,11 +35,14 @@ def _mlflow_logger(top_k, repeats):
     except Exception:
         return None
 
+    def _san(k):
+        return k.replace("@", "_at")  # MLflow metric names forbid '@'
+
     def log(cell):
         with mlflow.start_run(run_name=cell["name"]):
             mlflow.log_params({"config": cell["name"], "top_k": top_k, "repeats": repeats})
-            metrics = {k: float(v) for k, v in cell["metrics"].items()}
-            metrics.update({f"{k}_sd": float(v) for k, v in cell["metrics_sd"].items()})
+            metrics = {_san(k): float(v) for k, v in cell["metrics"].items()}
+            metrics.update({f"{_san(k)}_sd": float(v) for k, v in cell["metrics_sd"].items()})
             metrics.update({k: float(v) for k, v in cell["latency"].items()})
             metrics["cost_usd"] = float(cell["cost_usd"])
             mlflow.log_metrics(metrics)
