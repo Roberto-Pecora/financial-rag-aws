@@ -46,24 +46,30 @@ def cuad_records(rows: Iterable[dict], limit: int | None = None) -> list[Record]
 
 
 def financebench_records(rows: Iterable[dict]) -> list[Record]:
-    """FinanceBench rows -> evidence docs (the retrievable financial passages)."""
+    """FinanceBench rows -> evidence docs. `evidence` is a list of passages per row."""
     out: list[Record] = []
+    seen: set[str] = set()
     for row in rows:
-        text = (row.get("evidence_text") or row.get("evidence") or "").strip()
-        if not text:
-            continue
-        out.append(
-            {
-                "id": _doc_id("fb", text),
-                "text": text,
-                "metadata": {
-                    "source": "financebench",
-                    "source_type": "10k",
-                    "ingest_path": "ixhtml",
-                    "doc_name": row.get("doc_name", ""),
-                },
-            }
-        )
+        for ev in row.get("evidence") or []:
+            text = (ev.get("evidence_text") or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(
+                {
+                    "id": _doc_id("fb", text),
+                    "text": text,
+                    "metadata": {
+                        "source": "financebench",
+                        "source_type": "10k",
+                        "ingest_path": "pdf_text",
+                        "company": row.get("company", ""),
+                        "doc_name": ev.get("doc_name") or row.get("doc_name", ""),
+                        "page": ev.get("evidence_page_num"),
+                        "doc_period": row.get("doc_period"),
+                    },
+                }
+            )
     return out
 
 
@@ -79,9 +85,9 @@ def financebench_golden(rows: Iterable[dict]) -> list[dict[str, Any]]:
                     "query": q,
                     "gold_doc_ids": "[]",
                     "reference_answer": a,
-                    "task_type": "factual",
+                    "task_type": row.get("question_type", "factual"),
                     "risk_level": "medium",
-                    "notes": "financebench",
+                    "notes": f"financebench:{row.get('company', '')}",
                     "metadata_filter": "{}",
                 }
             )

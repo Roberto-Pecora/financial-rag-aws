@@ -27,13 +27,20 @@ def test_financebench_records_and_golden():
         {
             "question": "What was revenue?",
             "answer": "5,678",
-            "evidence_text": "Revenue was 5,678.",
-            "doc_name": "ACME_10K",
+            "company": "Acme",
+            "evidence": [
+                {
+                    "evidence_text": "Revenue was 5,678.",
+                    "doc_name": "ACME_10K",
+                    "evidence_page_num": 42,
+                }
+            ],
         },
-        {"question": "No evidence?", "answer": "n/a", "evidence_text": ""},
+        {"question": "No evidence?", "answer": "n/a", "evidence": []},
     ]
     recs = acquire.financebench_records(rows)
     assert len(recs) == 1 and recs[0]["metadata"]["source"] == "financebench"
+    assert recs[0]["metadata"]["company"] == "Acme" and recs[0]["metadata"]["page"] == 42
 
     golden = acquire.financebench_golden(rows)
     assert len(golden) == 2
