@@ -85,3 +85,37 @@ def format_markdown(results: list[dict[str, Any]], metrics: tuple[str, ...] = _M
         cells.append(f"{r.get('cost_usd', 0.0):.4f}")
         lines.append(f"| {r['name']} | " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def run_index_ablation(
+    named_indexes: dict[str, Any],
+    golden: list[dict[str, Any]],
+    top_k: int = 10,
+    repeats: int = 1,
+    mlflow_logger: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Evaluate named indexes (exact, turbovec, turbovec+rescore) on the index axis."""
+    results: list[dict[str, Any]] = []
+    for name, index in named_indexes.items():
+        cell = _run_cell(index.search, golden, top_k, repeats)
+        cell["name"] = name
+        cell["memory_bytes"] = int(getattr(index, "memory_bytes", 0))
+        results.append(cell)
+        if mlflow_logger is not None:
+            mlflow_logger(cell)
+    return results
+
+
+def format_index_markdown(
+    results: list[dict[str, Any]], metrics: tuple[str, ...] = _METRICS
+) -> str:
+    """Index-axis table: metrics, p50/p95 ms, index memory (MB)."""
+    cols = list(metrics) + ["p50 ms", "p95 ms", "mem MB"]
+    lines = ["| Index | " + " | ".join(cols) + " |", "|" + "---|" * (len(cols) + 1)]
+    for r in results:
+        cells = [f"{r['metrics'][m]:.3f}" for m in metrics]
+        cells.append(f"{r['latency']['p50_ms']:.0f}")
+        cells.append(f"{r['latency']['p95_ms']:.0f}")
+        cells.append(f"{r.get('memory_bytes', 0) / 1e6:.2f}")
+        lines.append(f"| {r['name']} | " + " | ".join(cells) + " |")
+    return "\n".join(lines)

@@ -46,6 +46,11 @@ kg = [
   # Optional local NER; not needed for the deterministic gazetteer path or tests.
   "gliner==0.2.13",
 ]
+efficient = [
+  # Efficiency ablation only (quantised search + fast encode); injectable in tests.
+  "turbovec",
+  "fastembed",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

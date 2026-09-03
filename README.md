@@ -42,6 +42,9 @@ change against a fixed golden set instead of trusting a leaderboard.
 - **Messy ingestion:** text-layer PDFs (`pymupdf`), financial tables linearised
   as `label: value` pairs (`pdfplumber`), and scanned pages via **AWS Textract**,
   all normalised into one canonical chunk schema with a per-path tag.
+- **Knowledge graph:** hybrid entity/covenant extraction (deterministic gazetteer + schema-guided
+  LLM) into a property graph, with a **graphRAG** retriever that walks issuer→instrument→covenant —
+  the structured-accuracy lever, not just chunk retrieval.
 - **Trained retrieval:** `bge-small` finetuned with `MultipleNegativesRankingLoss`,
   and a cross-encoder reranker, both trained on **synthetic queries + mined hard
   negatives** — no human labels.
@@ -67,6 +70,7 @@ and the answer gate.
 | `frag.aws.s3_store` | S3 data lake I/O (corpus, artifacts, eval) |
 | `frag.rag.store_opensearch` | Managed hybrid store; dense k-NN + BM25 fused with RRF |
 | `frag.rag.reranker` | Cross-encoder reranking stage (RERANK=on) |
+| `frag.kg` | Entity/covenant extraction, property graph, graphRAG retriever |
 | `frag.train` | Pair mining, embedding finetune, reranker training |
 | `frag.rag.{actor,critic,controller}` | Grounded answer, optional risk gate, orchestration |
 | `frag.eval` | Content-based harness, in-memory eval, ablation matrix |
@@ -128,13 +132,38 @@ Hard negatives are mined with **BM25 on purpose** — lexically close distractor
 are exactly what a dense model ranks just below the answer, so mining them targets
 the failure the finetune is meant to fix.
 
+## Knowledge graph & graphRAG
+
+For credit work the structured graph is the accuracy lever: the answer to "what
+is the restricted-payments capacity" lives in issuer→instrument→covenant, not in
+a lucky chunk. Extraction is **hybrid** — a deterministic gazetteer for fixed
+entities (tickers, sponsors) plus schema-guided LLM extraction for covenants and
+relationships — and the graphRAG retriever expands the relevant sub-graph as
+cited context. It implements the same `search()` contract, so `STORE_BACKEND=graph`
+drops in with no downstream change.
+
+```bash
+python scripts/build_graph.py --corpus data/corpus.jsonl --out data/graph.json --gazetteer data/gazetteer.json
+```
+
 ## Evaluation
 
 Relevance is **content-based**: a retrieved chunk counts as a hit if its text
 contains the numeric facts asserted in the golden row's reference answer, so the
 golden set is independent of chunk boundaries and survives re-chunking. Metrics
 are deterministic (`recall@k`, `precision@k`, `MRR@k`, `nDCG@k`); the actor/critic
-are not in the retrieval-metric loop.
+are not in the retrieval-metric loop. The eval index is **exact** (brute-force), so
+reported accuracy carries zero ANN loss; production OpenSearch uses HNSW with a
+tunable `ef_search` for the accuracy-for-latency dial.
+
+**Efficiency, measured not assumed.** Exact/HNSW float32 is the accuracy default.
+Quantised search (turbovec, 2/4-bit) is offered only as a first-stage recall with
+full-precision rescoring, and its cost is measured on our corpus — recall delta
+against memory and latency:
+
+```bash
+python scripts/run_index_ablation.py --corpus data/corpus.jsonl --bit-width 4
+```
 
 The ablation matrix sweeps the two trained models against their baselines:
 
@@ -185,7 +214,7 @@ for the teardown runbook and guardrails.
 ## Development
 
 ```bash
-make test        # 92 tests, hermetic — no AWS, no GPU, no API key
+make test        # 104 tests, hermetic — no AWS, no GPU, no API key
 make check       # ruff lint + format
 ```
 
