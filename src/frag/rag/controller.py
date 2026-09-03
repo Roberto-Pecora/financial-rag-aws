@@ -38,10 +38,19 @@ def make_default_store() -> DocumentStore:
     """
     backend = os.getenv("STORE_BACKEND", "opensearch").strip().lower()
     if backend == "qdrant":
-        return store_qdrant.QdrantStore()
-    from frag.rag.store_opensearch import OpenSearchStore
+        base: DocumentStore = store_qdrant.QdrantStore()
+    else:
+        from frag.rag.store_opensearch import OpenSearchStore
 
-    return OpenSearchStore()
+        base = OpenSearchStore()
+
+    # Optional third IR stage: wrap the store so hybrid candidates are reranked
+    # by the trained cross-encoder before the actor sees them (RERANK=on).
+    from frag.rag.reranker import CrossEncoderReranker, RerankingStore, rerank_enabled
+
+    if rerank_enabled():
+        return RerankingStore(base, CrossEncoderReranker())
+    return base
 
 
 class RagController:

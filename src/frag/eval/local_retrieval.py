@@ -33,7 +33,9 @@ class LocalDenseIndex:
         norms = np.linalg.norm(mat, axis=1, keepdims=True)
         self._matrix = mat / np.clip(norms, 1e-12, None)
 
-    def search(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
+    def search(
+        self, query: str, top_k: int = 10, metadata_filter: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         import numpy as np
 
         if not self._records:
