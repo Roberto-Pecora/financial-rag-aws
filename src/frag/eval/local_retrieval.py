@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from frag.eval.harness import evaluate
+from frag.rag.store_qdrant import _reciprocal_rank_fusion
 
 
 class LocalDenseIndex:
@@ -70,3 +71,49 @@ def evaluate_index(
     """Retrieve for every golden query and score with the content-based harness."""
     preds = predictions_for_golden(index, golden, top_k=top_k)
     return evaluate(preds, golden)
+
+
+class LocalHybridIndex:
+    """Dense (exact cosine) + BM25 fused with Reciprocal Rank Fusion, in memory.
+
+    Reuses the exact RRF from the Qdrant store so local hybrid ranking matches the
+    production backend. Implements the same search() contract.
+    """
+
+    def __init__(self, corpus: list[dict[str, Any]], embedder: Any) -> None:
+        import re
+
+        from rank_bm25 import BM25Okapi
+
+        self._records = [r for r in corpus if r.get("text")]
+        self.dense = LocalDenseIndex(self._records, embedder)
+        self._tokenise = lambda t: re.findall(r"[a-z0-9]+", t.lower())
+        self._bm25 = (
+            BM25Okapi([self._tokenise(r["text"]) for r in self._records]) if self._records else None
+        )
+        self._text_to_idx = {r["text"]: i for i, r in enumerate(self._records)}
+
+    def search(
+        self, query: str, top_k: int = 10, metadata_filter: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        import numpy as np
+
+        if not self._records or self._bm25 is None:
+            return []
+        candidate_k = max(top_k * 4, 30)
+
+        # Dense ranking (as record indices).
+        dense_hits = self.dense.search(query, top_k=candidate_k)
+        dense_rank = [str(self._text_to_idx[h["text"]]) for h in dense_hits]
+
+        # BM25 ranking (as record indices).
+        scores = self._bm25.get_scores(self._tokenise(query))
+        bm25_rank = [str(i) for i in np.argsort(-scores)[:candidate_k]]
+
+        fused = _reciprocal_rank_fusion([dense_rank, bm25_rank])
+        ranked = sorted(fused, key=lambda i: fused[i], reverse=True)[:top_k]
+        out = []
+        for i in ranked:
+            r = self._records[int(i)]
+            out.append({"text": r["text"], "metadata": r.get("metadata", {}), "score": fused[i]})
+        return out

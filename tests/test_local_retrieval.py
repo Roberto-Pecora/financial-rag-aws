@@ -64,3 +64,24 @@ def test_index_is_exact_matches_bruteforce_argmax():
         if sim > best_sim:
             best, best_sim = r["metadata"]["doc_id"], sim
     assert top["metadata"]["doc_id"] == best
+
+
+def test_local_hybrid_rescues_lexical_match():
+    """BM25 half rescues an exact-term doc the dense half ranks lower."""
+    corpus = [
+        {
+            "id": "a",
+            "text": "Revenue and profit grew across all segments.",
+            "metadata": {"doc_id": "a"},
+        },
+        {
+            "id": "b",
+            "text": "The RESTRICTED PAYMENTS covenant caps distributions.",
+            "metadata": {"doc_id": "b"},
+        },
+    ]
+    idx = lr.LocalHybridIndex(corpus, _FakeEmbedder())
+    hits = idx.search("restricted payments covenant", top_k=2)
+    ids = [h["metadata"]["doc_id"] for h in hits]
+    assert "b" in ids  # exact lexical match surfaced via BM25 fusion
+    assert {"text", "metadata", "score"} <= set(hits[0])
