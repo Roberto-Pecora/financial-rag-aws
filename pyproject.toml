@@ -51,6 +51,10 @@ efficient = [
   "turbovec",
   "fastembed",
 ]
+data = [
+  # Corpus acquisition: CUAD (legal contracts) + FinanceBench (10-Ks + golden).
+  "datasets==3.0.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
