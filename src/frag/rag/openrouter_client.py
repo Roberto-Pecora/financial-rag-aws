@@ -5,28 +5,26 @@ import re
 
 import requests
 
-# OpenRouter exposes an OpenAI-compatible chat-completions API. A single client
-# serves actor, critic, and synthetic-query generation; the model is chosen per
-# role through an environment variable (e.g. ACTOR_MODEL, CRITIC_MODEL), mirroring
-# the OllamaClient contract so Actor/Critic need no change beyond the default.
+from frag.eval.pricing import cost_from_usage
+from frag.eval.trace import Timer
+
+# OpenAI-compatible client; model chosen per role via env (ACTOR_MODEL, etc.).
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct"
 
 
 class OpenRouterClient:
-    """Minimal OpenRouter chat client exposing `generate(prompt) -> str`.
-
-    The response is cleaned to a bare JSON object/array so downstream callers can
-    `json.loads` it directly, matching the OllamaClient behaviour it replaces.
-    Swapping the local 3B judge for a capable hosted model is what turns the
-    critic score from a noisy, directional signal into a trustworthy one.
-    """
+    """OpenRouter chat client exposing `generate(prompt) -> str` (cleaned JSON)."""
 
     def __init__(self, model_env_key: str) -> None:
         self.base = os.getenv("OPENROUTER_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.model = os.getenv(model_env_key) or os.getenv("OPENROUTER_MODEL", _DEFAULT_MODEL)
         self.timeout = int(os.getenv("OPENROUTER_TIMEOUT", "120"))
+        # Per-call telemetry, set after each generate() for latency/cost eval.
+        self.last_latency_s = 0.0
+        self.last_usage: dict | None = None
+        self.last_cost = 0.0
 
     @staticmethod
     def _clean(raw: str) -> str:
@@ -60,13 +58,17 @@ class OpenRouterClient:
             "response_format": {"type": "json_object"},
         }
 
-        r = requests.post(
-            f"{self.base}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=self.timeout,
-        )
-        r.raise_for_status()
-        data = r.json()
+        with Timer() as t:
+            r = requests.post(
+                f"{self.base}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+            data = r.json()
+        self.last_latency_s = t.elapsed
+        self.last_usage = data.get("usage")
+        self.last_cost = cost_from_usage(self.model, self.last_usage)
         raw = data["choices"][0]["message"]["content"] or ""
         return self._clean(raw)

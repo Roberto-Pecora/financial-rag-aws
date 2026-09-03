@@ -1,12 +1,8 @@
-"""Run the retrieval ablation matrix and print a Markdown findings table (no AWS).
+"""Retrieval ablation matrix with quality + latency + cost, logged to MLflow.
 
     python scripts/run_ablation.py --corpus data/corpus.jsonl \
         --base BAAI/bge-small-en-v1.5 --finetuned artifacts/bge-ft \
-        --reranker artifacts/reranker
-
-Sweeps {base, finetuned} embeddings x {rerank off, on} over the golden set,
-logs each cell to MLflow, and prints the table for the README. The dense/hybrid
-axis is added by pointing at the live OpenSearch store (separate runner).
+        --reranker artifacts/reranker --repeats 5
 """
 
 from __future__ import annotations
@@ -33,15 +29,34 @@ def _load_golden(path):
     ]
 
 
+def _mlflow_logger(top_k, repeats):
+    try:
+        import mlflow
+    except Exception:
+        return None
+
+    def log(cell):
+        with mlflow.start_run(run_name=cell["name"]):
+            mlflow.log_params({"config": cell["name"], "top_k": top_k, "repeats": repeats})
+            metrics = {k: float(v) for k, v in cell["metrics"].items()}
+            metrics.update({f"{k}_sd": float(v) for k, v in cell["metrics_sd"].items()})
+            metrics.update({k: float(v) for k, v in cell["latency"].items()})
+            metrics["cost_usd"] = float(cell["cost_usd"])
+            mlflow.log_metrics(metrics)
+
+    return log
+
+
 def main():
     configure_runtime()
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--golden", default="data/golden_seed.csv")
     ap.add_argument("--base", default="BAAI/bge-small-en-v1.5")
-    ap.add_argument("--finetuned", default=None, help="path to finetuned embedding artifact")
-    ap.add_argument("--reranker", default=None, help="path to trained cross-encoder artifact")
+    ap.add_argument("--finetuned", default=None)
+    ap.add_argument("--reranker", default=None)
     ap.add_argument("--top-k", type=int, default=10)
+    ap.add_argument("--repeats", type=int, default=1)
     args = ap.parse_args()
 
     from sentence_transformers import SentenceTransformer
@@ -56,22 +71,14 @@ def main():
     if args.reranker:
         rerankers["rerank-on"] = CrossEncoderReranker(model_name=args.reranker)
 
-    try:
-        import mlflow
-
-        def logger(name, summary):
-            with mlflow.start_run(run_name=name):
-                mlflow.log_params({"config": name, "top_k": args.top_k})
-                mlflow.log_metrics(
-                    {k: float(v) for k, v in summary.items() if isinstance(v, int | float)}
-                )
-    except Exception:
-        logger = None
-
-    corpus = _load_corpus(args.corpus)
-    golden = _load_golden(args.golden)
     results = run_local_ablation(
-        corpus, golden, embedders, rerankers, top_k=args.top_k, mlflow_logger=logger
+        _load_corpus(args.corpus),
+        _load_golden(args.golden),
+        embedders,
+        rerankers,
+        top_k=args.top_k,
+        repeats=args.repeats,
+        mlflow_logger=_mlflow_logger(args.top_k, args.repeats),
     )
     print("\n" + format_markdown(results) + "\n")
 

@@ -140,7 +140,16 @@ The ablation matrix sweeps the two trained models against their baselines:
 
 ```bash
 python scripts/run_ablation.py --corpus data/corpus.jsonl \
-    --base BAAI/bge-small-en-v1.5 --finetuned artifacts/bge-ft --reranker artifacts/reranker
+    --base BAAI/bge-small-en-v1.5 --finetuned artifacts/bge-ft --reranker artifacts/reranker --repeats 5
+```
+
+Each cell reports IR quality (mean ± sd over `--repeats`), retrieval+rerank
+latency (p50/p95 ms), and cost, logged to MLflow — so a quality gain is weighed
+against its latency, not read in isolation. End-to-end LLM latency and cost
+(computed from OpenRouter token usage × a price map) come from the bench:
+
+```bash
+python scripts/bench_end_to_end.py --golden data/golden_seed.csv --repeats 3
 ```
 
 ### Results
@@ -176,7 +185,7 @@ for the teardown runbook and guardrails.
 ## Development
 
 ```bash
-make test        # 81 tests, hermetic — no AWS, no GPU, no API key
+make test        # 92 tests, hermetic — no AWS, no GPU, no API key
 make check       # ruff lint + format
 ```
 
