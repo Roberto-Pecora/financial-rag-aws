@@ -37,6 +37,11 @@ def make_default_store() -> DocumentStore:
     Imports are local so selecting one backend never requires the other's deps.
     """
     backend = os.getenv("STORE_BACKEND", "opensearch").strip().lower()
+    if backend == "graph":
+        from frag.kg.graph import PropertyGraph
+        from frag.kg.graph_rag import GraphRAGRetriever
+
+        return GraphRAGRetriever(PropertyGraph.load(os.environ["GRAPH_PATH"]))
     if backend == "qdrant":
         base: DocumentStore = store_qdrant.QdrantStore()
     else:

@@ -29,6 +29,8 @@ dependencies = [
   "pdfplumber==0.11.4",
   "boto3==1.35.76",
   "opensearch-py==2.7.1",
+  "networkx==3.3",
+  "rapidfuzz==3.10.1",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +41,10 @@ dev = [
 ]
 eval = [
   "mlflow==3.15.1",
+]
+kg = [
+  # Optional local NER; not needed for the deterministic gazetteer path or tests.
+  "gliner==0.2.13",
 ]
 
 [tool.setuptools.packages.find]
