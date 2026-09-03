@@ -29,11 +29,26 @@ def _critic_enabled() -> bool:
     return os.getenv("CRITIC", "off").strip().lower() in {"on", "1", "true", "yes"}
 
 
+def make_default_store() -> DocumentStore:
+    """Build the store selected by STORE_BACKEND (default: opensearch).
+
+    OpenSearch is the project's real backend (managed AWS hybrid search); the
+    Qdrant path is retained so the pipeline still runs locally with no AWS.
+    Imports are local so selecting one backend never requires the other's deps.
+    """
+    backend = os.getenv("STORE_BACKEND", "opensearch").strip().lower()
+    if backend == "qdrant":
+        return store_qdrant.QdrantStore()
+    from frag.rag.store_opensearch import OpenSearchStore
+
+    return OpenSearchStore()
+
+
 class RagController:
     """Thin orchestrator: store retrieves, actor generates, optional critic gates."""
 
     def __init__(self, store: DocumentStore | None = None) -> None:
-        self.store = store or store_qdrant.QdrantStore()
+        self.store = store or make_default_store()
         self.actor = Actor()
         self.use_critic = _critic_enabled()
         self.critic = Critic() if self.use_critic else None

@@ -106,6 +106,9 @@ def _patch_services_session():
 
     # Also fix the reference already held by the controller module
     ctrl.store_qdrant = type("_mod", (), {"QdrantStore": _StubStore})()
+    # The controller's default store now comes from a backend factory; stub it
+    # so RagController() with no injected store never opens a live backend.
+    ctrl.make_default_store = lambda: _StubStore()
 
     yield  # tests run here
 
@@ -123,6 +126,7 @@ def _stub_qdrant(monkeypatch):
     import frag.rag.controller as ctrl
 
     monkeypatch.setattr(ctrl, "store_qdrant", type("_mod", (), {"QdrantStore": _StubStore})())
+    monkeypatch.setattr(ctrl, "make_default_store", lambda: _StubStore())
 
 
 @pytest.fixture(autouse=True)

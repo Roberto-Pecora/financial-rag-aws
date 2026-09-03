@@ -28,6 +28,7 @@ dependencies = [
   "pymupdf==1.24.11",
   "pdfplumber==0.11.4",
   "boto3==1.35.76",
+  "opensearch-py==2.7.1",
 ]
 
 [project.optional-dependencies]

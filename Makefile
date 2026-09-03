@@ -28,3 +28,13 @@ build-golden:
 
 eval:
 	python scripts/run_eval.py
+
+# --- AWS infra (free-tier; spin up for a demo, tear down after) -------------
+infra-plan:
+	cd infra && terraform init -input=false && terraform plan
+
+infra-up:
+	cd infra && terraform init -input=false && terraform apply
+
+infra-down:
+	cd infra && terraform destroy
