@@ -1,0 +1,8 @@
+# Terraform provider cache and state — never commit these.
+.terraform/
+.terraform.tfstate.lock.info
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+# Keep .terraform.lock.hcl committed (pins provider versions).

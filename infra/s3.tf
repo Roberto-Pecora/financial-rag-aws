@@ -43,6 +43,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "datalake" {
   rule {
     id     = "expire-noncurrent"
     status = "Enabled"
+    filter {} # apply to every object in the bucket
     noncurrent_version_expiration {
       noncurrent_days = 7
     }
