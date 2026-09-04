@@ -57,6 +57,17 @@ def test_llm_extractor_handles_bad_json():
     assert ex.LLMExtractor(llm=_FakeLLM("nope")).extract("x") == ([], [])
 
 
+def test_llm_extractor_propagates_transport_error():
+    import pytest
+
+    class _RaisingLLM:
+        def generate(self, prompt):
+            raise ConnectionError("network down")
+
+    with pytest.raises(ConnectionError):
+        ex.LLMExtractor(llm=_RaisingLLM()).extract("some text")
+
+
 def test_hybrid_extract_stamps_provenance():
     """doc_id flows onto entities (source_docs) and relations (source_doc)."""
     raw = '{"entities": [], "relations": [{"source":"Acme","type":"issues","target":"Notes"}]}'

@@ -20,7 +20,10 @@ concrete implementations, imported lazily.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 Record = dict[str, Any]
 
@@ -131,13 +134,15 @@ class SyntheticQueryGenerator:
         self.llm = llm
 
     def generate_queries(self, passage: str, n: int = 2) -> list[str]:
+        # Transport/auth errors propagate; only a malformed response yields nothing.
         raw = self.llm.generate(self._PROMPT.format(n=n, passage=passage[:4000]))
         try:
             data = json.loads(raw)
-            queries = data.get("queries", [])
-            return [str(q).strip() for q in queries if str(q).strip()][:n]
-        except Exception:
+        except json.JSONDecodeError:
+            logger.warning("query generator returned non-JSON; skipping. raw=%.200r", raw)
             return []
+        queries = data.get("queries", []) if isinstance(data, dict) else []
+        return [str(q).strip() for q in queries if str(q).strip()][:n]
 
 
 class InMemoryRetriever:

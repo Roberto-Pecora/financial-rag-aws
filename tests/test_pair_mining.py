@@ -67,6 +67,17 @@ def test_synthetic_query_generator_handles_bad_json():
     assert gen.generate_queries("x", n=2) == []
 
 
+def test_synthetic_query_generator_propagates_transport_error():
+    import pytest
+
+    class _RaisingLLM:
+        def generate(self, prompt):
+            raise ConnectionError("network down")
+
+    with pytest.raises(ConnectionError):
+        pm.SyntheticQueryGenerator(llm=_RaisingLLM()).generate_queries("x", n=2)
+
+
 def test_synthetic_query_generator_caps_n():
     gen = pm.SyntheticQueryGenerator(llm=_FakeLLM('{"queries": ["a", "b", "c"]}'))
     assert gen.generate_queries("x", n=2) == ["a", "b"]

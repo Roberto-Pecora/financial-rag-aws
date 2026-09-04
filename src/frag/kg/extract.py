@@ -9,10 +9,13 @@ fake LLM. Optional GLiNER local NER is a lazy add, not required.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from frag.kg.schema import Entity, Relation, entity_id
+
+logger = logging.getLogger(__name__)
 
 
 class GazetteerExtractor:
@@ -55,10 +58,15 @@ class LLMExtractor:
         self.llm = llm
 
     def extract(self, text: str) -> tuple[list[Entity], list[Relation]]:
+        # Transport/auth errors propagate; only a malformed response yields nothing.
         raw = self.llm.generate(self._PROMPT.format(passage=text[:6000]))
         try:
             data = json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
+            logger.warning("extractor returned non-JSON; skipping chunk. raw=%.200r", raw)
+            return [], []
+        if not isinstance(data, dict):
+            logger.warning("extractor JSON was not an object; skipping chunk. raw=%.200r", raw)
             return [], []
         return _parse_entities(data.get("entities", [])), _parse_relations(
             data.get("relations", [])
