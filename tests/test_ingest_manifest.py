@@ -43,7 +43,7 @@ def test_run_manifest_dedupes_and_counts(monkeypatch):
     assert stats["per_ingest_path"] == {"pdf_text": 2, "textract": 1}
 
 
-def test_run_manifest_isolates_errors(monkeypatch):
+def test_run_manifest_isolates_errors(monkeypatch, caplog):
     def fake_dispatch(entry):
         if entry.get("bad"):
             raise ValueError("boom")
@@ -55,6 +55,7 @@ def test_run_manifest_isolates_errors(monkeypatch):
     assert stats["records"] == 1
     assert len(stats["errors"]) == 1
     assert "boom" in stats["errors"][0]["error"]
+    assert "skipping source z" in caplog.text  # the skip is logged, not silent
 
 
 def test_run_manifest_is_idempotent(monkeypatch):

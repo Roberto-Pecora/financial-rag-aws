@@ -19,11 +19,14 @@ Phase 2 without touching this logic.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from frag.sources import pdf_tables, pdf_text
 from frag.sources.chunking import make_chunk_records
+
+logger = logging.getLogger(__name__)
 
 Record = dict[str, Any]
 Entry = dict[str, Any]
@@ -80,7 +83,9 @@ def run_manifest(
         try:
             produced = dispatch(entry)
         except Exception as exc:  # a bad source must not abort the whole batch
-            errors.append({"entry": str(entry.get("path") or entry.get("url")), "error": str(exc)})
+            source = str(entry.get("path") or entry.get("url"))
+            logger.warning("skipping source %s: %s", source, exc)
+            errors.append({"entry": source, "error": str(exc)})
             continue
         for rec in produced:
             rid = rec["id"]
