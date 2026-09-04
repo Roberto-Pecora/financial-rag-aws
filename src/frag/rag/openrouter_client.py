@@ -8,6 +8,7 @@ import requests
 
 from frag.eval.pricing import cost_from_usage
 from frag.eval.trace import Timer
+from frag.utils.http_retry import request_with_retry
 
 # OpenAI-compatible client; model chosen per role via env (ACTOR_MODEL, etc.).
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -31,6 +32,8 @@ class OpenRouterClient:
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.model = os.getenv(model_env_key) or os.getenv("OPENROUTER_MODEL", _DEFAULT_MODEL)
         self.timeout = int(os.getenv("OPENROUTER_TIMEOUT", "120"))
+        self.max_retries = int(os.getenv("OPENROUTER_MAX_RETRIES", "4"))
+        self.retry_base_delay = float(os.getenv("OPENROUTER_RETRY_BASE_DELAY", "2"))
         self.response_model = response_model
         # Per-call telemetry, set after each generate() for latency/cost eval.
         self.last_latency_s = 0.0
@@ -83,14 +86,14 @@ class OpenRouterClient:
 
         payload = self._build_payload(prompt)
 
+        url = f"{self.base}/chat/completions"
         with Timer() as t:
-            r = requests.post(
-                f"{self.base}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=self.timeout,
+            r = request_with_retry(
+                lambda: requests.post(url, headers=headers, json=payload, timeout=self.timeout),
+                max_retries=self.max_retries,
+                base_delay=self.retry_base_delay,
+                label=f"openrouter[{self.model}]",
             )
-            r.raise_for_status()
             data = r.json()
         self.last_latency_s = t.elapsed
         self.last_usage = data.get("usage")
