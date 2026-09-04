@@ -16,6 +16,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from frag.rag.untrusted import wrap_untrusted
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -71,15 +73,15 @@ class _CalcArgs(BaseModel):
 
 
 def _cite(hits: list[dict[str, Any]]) -> str:
-    """Render store hits as cited lines the model can quote."""
+    """Render store hits as cited, untrusted-marked blocks the model can quote."""
     if not hits:
         return "No results."
-    lines = []
+    blocks = []
     for h in hits:
         meta = h.get("metadata", {})
         label = meta.get("doc_id") or meta.get("entity") or "doc"
-        lines.append(f"[{label}] {h.get('text', '')}")
-    return "\n\n".join(lines)
+        blocks.append(wrap_untrusted(label, h.get("text", "")))
+    return "\n\n".join(blocks)
 
 
 def make_retrieve_tool(store: Any) -> Tool:

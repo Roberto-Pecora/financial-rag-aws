@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from frag.rag import prompts
 from frag.rag.llm_schemas import ActorResponse
 from frag.rag.openrouter_client import OpenRouterClient
+from frag.rag.untrusted import render_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class Actor:
         self.prompt_version = self.prompt.version
 
     def build_prompt(self, query: str, contexts: list) -> str:
-        evidence = "\n\n".join([f"[{_doc_id(c, i)}] {c['text']}" for i, c in enumerate(contexts)])
+        evidence = render_evidence(contexts, _doc_id)
         return self.prompt.render(query=query, evidence=evidence)
 
     def act(self, query: str, contexts: list) -> dict:

@@ -4,7 +4,9 @@ import os
 from typing import Any, Protocol
 
 import frag.rag.store_qdrant as store_qdrant
+from frag.agent.guardrails import screen_input, screen_output
 from frag.rag.actor import Actor
+from frag.rag.actor import _doc_id as actor_doc_id
 from frag.rag.critic import Critic
 
 
@@ -116,6 +118,19 @@ class RagController:
             "results":      list[dict],   # raw retrieved docs for transparency
         }
         """
+        # Input guardrail: block override/injection attempts before any LLM call.
+        verdict = screen_input(query)
+        if not verdict.allowed:
+            return {
+                "query": query,
+                "status": "refused",
+                "answer": "Request blocked by the input guardrail.",
+                "citations": [],
+                "critic_score": None,
+                "critic_notes": verdict.reason,
+                "results": [],
+            }
+
         contexts = self.store.search(query=query, top_k=top_k, metadata_filter=metadata_filter)
 
         actor_out = self.actor.act(query, contexts)
@@ -126,27 +141,46 @@ class RagController:
             actor_abstained = not contexts or actor_out["answer"].strip().lower().startswith(
                 "insufficient evidence"
             )
-            return {
-                "query": query,
-                "status": "abstained" if actor_abstained else "accepted",
-                "answer": actor_out["answer"],
-                "citations": actor_out["citations"],
-                "critic_score": None,
-                "critic_notes": "critic disabled (CRITIC=off)",
-                "results": contexts,
-            }
+            return self._guard_output(
+                {
+                    "query": query,
+                    "status": "abstained" if actor_abstained else "accepted",
+                    "answer": actor_out["answer"],
+                    "citations": actor_out["citations"],
+                    "critic_score": None,
+                    "critic_notes": "critic disabled (CRITIC=off)",
+                    "results": contexts,
+                },
+                contexts,
+            )
 
         # Optional risk gate: a capable critic scores the draft and can veto it.
         critic_out = self.critic.critique(
             query, contexts, actor_out["answer"], actor_out["citations"]
         )
         accepted = critic_out["score"] >= self.min_score
-        return {
-            "query": query,
-            "status": "accepted" if accepted else "abstained",
-            "answer": actor_out["answer"],
-            "citations": actor_out["citations"],
-            "critic_score": critic_out["score"],
-            "critic_notes": critic_out["notes"],
-            "results": contexts,
-        }
+        return self._guard_output(
+            {
+                "query": query,
+                "status": "accepted" if accepted else "abstained",
+                "answer": actor_out["answer"],
+                "citations": actor_out["citations"],
+                "critic_score": critic_out["score"],
+                "critic_notes": critic_out["notes"],
+                "results": contexts,
+            },
+            contexts,
+        )
+
+    def _guard_output(self, payload: dict[str, Any], contexts: list) -> dict[str, Any]:
+        """Downgrade an accepted answer to abstained if it fails the output guardrail."""
+        if payload["status"] != "accepted":
+            return payload
+        labels = {actor_doc_id(c, i) for i, c in enumerate(contexts)}
+        verdict = screen_output(payload["answer"], payload["citations"], labels)
+        if not verdict.allowed:
+            payload["status"] = "abstained"
+            payload["answer"] = "Answer withheld by the output guardrail."
+            note = payload.get("critic_notes") or ""
+            payload["critic_notes"] = f"{note} [guardrail: {verdict.reason}]".strip()
+        return payload

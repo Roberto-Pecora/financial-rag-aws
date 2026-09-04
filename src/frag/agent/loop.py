@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from frag.agent.guardrails import screen_input
 from frag.agent.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,16 @@ class AgentLoop:
         self.max_tool_calls = max_tool_calls
 
     def run(self, question: str) -> dict[str, Any]:
+        verdict = screen_input(question)
+        if not verdict.allowed:
+            return {
+                "answer": "Request blocked by the input guardrail.",
+                "status": "refused",
+                "trace": [],
+                "tool_calls": 0,
+                "total_cost": 0.0,
+            }
+
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": question},

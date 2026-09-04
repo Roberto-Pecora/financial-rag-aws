@@ -49,13 +49,14 @@ def test_retrieve_tool_cites_and_passes_args():
     tool = tools.make_retrieve_tool(store)
     out = tool.call({"query": "revenue", "top_k": 1})
     assert store.seen == ("revenue", 1)
-    assert "[ACME_10K]" in out and "Revenue was 5,678." in out
+    # hits are wrapped as untrusted, labelled by doc_id
+    assert "<<<UNTRUSTED_DOC ACME_10K>>>" in out and "Revenue was 5,678." in out
 
 
 def test_graph_lookup_tool_uses_entity_label():
     tool = tools.make_graph_lookup_tool(_FakeStore(_HITS))
     out = tool.call({"query": "change of control"})
-    assert "[Change of Control]" in out
+    assert "<<<UNTRUSTED_DOC Change of Control>>>" in out
 
 
 def test_calc_tool_runs():

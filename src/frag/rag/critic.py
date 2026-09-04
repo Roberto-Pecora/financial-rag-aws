@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from frag.rag import prompts
 from frag.rag.llm_schemas import CriticResponse
 from frag.rag.openrouter_client import OpenRouterClient
+from frag.rag.untrusted import render_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class Critic:
         self.prompt_version = self.prompt.version
 
     def build_prompt(self, query: str, contexts: list, answer: str, citations: list) -> str:
-        evidence = "\n\n".join([f"[{_doc_id(c, i)}] {c['text']}" for i, c in enumerate(contexts)])
+        evidence = render_evidence(contexts, _doc_id)
         citations_str = ", ".join(citations) if citations else "none"
         return self.prompt.render(
             query=query, evidence=evidence, answer=answer, citations=citations_str
