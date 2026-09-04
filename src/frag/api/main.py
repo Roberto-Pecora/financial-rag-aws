@@ -6,7 +6,7 @@ from functools import lru_cache
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from frag.api.schemas import EvalRequest, QueryRequest
+from frag.api.schemas import AskRequest, EvalRequest, QueryRequest
 from frag.eval.harness import evaluate
 from frag.rag.controller import RagController
 from frag.sources.loader import load_live_sources, load_sample_sources
@@ -27,6 +27,35 @@ def get_controller() -> RagController:
     accessor defers that cost to the first request instead.
     """
     return RagController()
+
+
+@lru_cache(maxsize=1)
+def get_orchestrator():
+    """Build the router+agent orchestrator over the same store; graph tool if present."""
+    from frag.agent.loop import AgentLoop
+    from frag.agent.orchestrator import Orchestrator
+    from frag.agent.tools import (
+        ToolRegistry,
+        make_calc_tool,
+        make_graph_lookup_tool,
+        make_retrieve_tool,
+    )
+    from frag.rag import prompts
+    from frag.rag.openrouter_client import OpenRouterClient
+
+    controller = get_controller()
+    tools = [make_retrieve_tool(controller.store), make_calc_tool()]
+    graph_path = os.getenv("GRAPH_PATH")
+    if graph_path and os.path.exists(graph_path):
+        from frag.kg.graph import PropertyGraph
+        from frag.kg.graph_rag import GraphRAGRetriever
+
+        graph = GraphRAGRetriever(PropertyGraph.load(graph_path))
+        tools.insert(1, make_graph_lookup_tool(graph))
+
+    llm = OpenRouterClient("AGENT_MODEL")
+    agent = AgentLoop(llm, ToolRegistry(tools), prompts.get("agent").body)
+    return Orchestrator(controller, agent, rewrite_llm=llm, route_llm=llm, critic=controller.critic)
 
 
 @app.on_event("startup")
@@ -160,6 +189,10 @@ def ui_page():
     <p class="sub">Ask questions about indexed SEC filings and market data.</p>
     <div id="messages" class="messages"></div>
     <form id="chat-form">
+      <select id="mode" title="RAG = single-shot retrieval; Agent = multi-hop tool-loop">
+        <option value="rag">RAG</option>
+        <option value="agent">Agent</option>
+      </select>
       <select id="ticker">
         <option value="">All tickers</option>
         <option value="NVDA">NVDA</option>
@@ -254,6 +287,22 @@ def ui_page():
     return html;
   }
 
+  function renderAgentReply(data) {
+    const answered = data.status === 'answered';
+    const tools = (data.trace || []).filter(s => s.tool).map(s => s.tool);
+    let html = `<div class="answer-label">Answer</div>`;
+    html += answered
+      ? `<div class="answer-text">${data.answer || ''}</div>`
+      : `<div class="abstained-warn">&#x26A0;&#xFE0F; ${data.answer || 'No answer.'}</div>`;
+    const cost = typeof data.total_cost === 'number' ? '$' + data.total_cost.toFixed(4) : 'n/a';
+    html += `<div class="citations"><span class="cit-label">Route</span>` +
+            `<span class="cit-tag">${data.route || '?'}</span>` +
+            (tools.length ? `<span class="cit-label">Tools</span>` +
+              tools.map(t=>`<span class="cit-tag">${t}</span>`).join('') : '') +
+            `<span class="cit-label">Cost</span><span class="cit-tag">${cost}</span></div>`;
+    return html;
+  }
+
   function toggleDrawer(id) {
     const drawer = document.getElementById(id);
     const arrow  = document.getElementById(id + '-arrow');
@@ -284,15 +333,25 @@ def ui_page():
     }, 1000);
 
     try {
-      const filter = ticker.value ? { ticker: ticker.value } : null;
-      const res  = await fetch('/v1/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, top_k: 8, metadata_filter: filter })
-      });
+      const agentMode = document.getElementById('mode').value === 'agent';
+      let res;
+      if (agentMode) {
+        res = await fetch('/v1/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q })
+        });
+      } else {
+        const filter = ticker.value ? { ticker: ticker.value } : null;
+        res = await fetch('/v1/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, top_k: 8, metadata_filter: filter })
+        });
+      }
       const data = await res.json();
       messages.removeChild(thinking);
-      addMsg('assistant', renderReply(data));
+      addMsg('assistant', agentMode ? renderAgentReply(data) : renderReply(data));
     } catch (_) {
       messages.removeChild(thinking);
       addMsg('assistant', '<span style="color:#f87171">&#x26A0; Request failed &mdash; please try again.</span>');
@@ -344,6 +403,12 @@ def query(req: QueryRequest):
     return get_controller().answer_with_critique(
         req.query, top_k=req.top_k or 8, metadata_filter=req.metadata_filter
     )
+
+
+@app.post("/v1/ask")
+def ask(req: AskRequest):
+    """Route the question: single-fact -> RAG; multi-hop -> the agent tool-loop."""
+    return get_orchestrator().answer(req.question, history=req.history)
 
 
 @app.post("/v1/eval")

@@ -22,6 +22,11 @@ class QueryRequest(BaseModel):
     metadata_filter: dict[str, Any] | None = None
 
 
+class AskRequest(BaseModel):
+    question: str
+    history: list[dict[str, str]] | None = None
+
+
 class EvalRequest(BaseModel):
     predictions: Any
     golden: Any
