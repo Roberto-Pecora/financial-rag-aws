@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Any
 
 import requests
 
@@ -13,18 +14,47 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct"
 
 
-class OpenRouterClient:
-    """OpenRouter chat client exposing `generate(prompt) -> str` (cleaned JSON)."""
+def _structured_output_enabled() -> bool:
+    return os.getenv("LLM_STRUCTURED_OUTPUT", "off").strip().lower() in {"on", "1", "true", "yes"}
 
-    def __init__(self, model_env_key: str) -> None:
+
+class OpenRouterClient:
+    """OpenRouter chat client exposing `generate(prompt) -> str` (cleaned JSON).
+
+    `response_model` (a Pydantic model) drives structured output: when
+    LLM_STRUCTURED_OUTPUT is on, its JSON schema constrains generation; otherwise
+    the request just asks for a JSON object.
+    """
+
+    def __init__(self, model_env_key: str, response_model: Any | None = None) -> None:
         self.base = os.getenv("OPENROUTER_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.model = os.getenv(model_env_key) or os.getenv("OPENROUTER_MODEL", _DEFAULT_MODEL)
         self.timeout = int(os.getenv("OPENROUTER_TIMEOUT", "120"))
+        self.response_model = response_model
         # Per-call telemetry, set after each generate() for latency/cost eval.
         self.last_latency_s = 0.0
         self.last_usage: dict | None = None
         self.last_cost = 0.0
+
+    def _response_format(self) -> dict[str, Any]:
+        if self.response_model is not None and _structured_output_enabled():
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": self.response_model.__name__.lower(),
+                    "schema": self.response_model.model_json_schema(),
+                },
+            }
+        return {"type": "json_object"}
+
+    def _build_payload(self, prompt: str) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": float(os.getenv("OPENROUTER_TEMPERATURE", "0")),
+            "response_format": self._response_format(),
+        }
 
     @staticmethod
     def _clean(raw: str) -> str:
@@ -51,12 +81,7 @@ class OpenRouterClient:
         if title:
             headers["X-Title"] = title
 
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": float(os.getenv("OPENROUTER_TEMPERATURE", "0")),
-            "response_format": {"type": "json_object"},
-        }
+        payload = self._build_payload(prompt)
 
         with Timer() as t:
             r = requests.post(

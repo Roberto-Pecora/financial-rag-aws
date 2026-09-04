@@ -24,7 +24,7 @@ def _doc_id(ctx: dict, idx: int) -> str:
 
 class Critic:
     def __init__(self, llm_client: LLMClient | None = None, prompt_version: int | None = None):
-        self.client = llm_client or OpenRouterClient("CRITIC_MODEL")
+        self.client = llm_client or OpenRouterClient("CRITIC_MODEL", response_model=CriticResponse)
         version = prompt_version or prompts.resolve_version("critic", "CRITIC_PROMPT_VERSION")
         self.prompt = prompts.get("critic", version)
         self.prompt_version = self.prompt.version
