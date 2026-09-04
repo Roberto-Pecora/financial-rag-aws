@@ -85,7 +85,7 @@ def ui_page():
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Financial RAG Chat</title>
+  <title>Financial RAG &amp; Agent</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Inter, system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100dvh; }
@@ -185,30 +185,23 @@ def ui_page():
 <body>
 <div class="shell">
   <div class="card">
-    <div class="hdr"><div class="dot"></div><h1>Financial RAG Chat</h1></div>
-    <p class="sub">Ask questions about indexed SEC filings and market data.</p>
+    <div class="hdr"><div class="dot"></div><h1>Financial RAG &amp; Agent</h1></div>
+    <p class="sub">Ask about covenants and clauses across ingested contracts and filings. RAG answers single facts; Agent handles multi-hop questions.</p>
     <div id="messages" class="messages"></div>
     <form id="chat-form">
       <select id="mode" title="RAG = single-shot retrieval; Agent = multi-hop tool-loop">
         <option value="rag">RAG</option>
         <option value="agent">Agent</option>
       </select>
-      <select id="ticker">
-        <option value="">All tickers</option>
-        <option value="NVDA">NVDA</option>
-        <option value="AAPL">AAPL</option>
-        <option value="MSFT">MSFT</option>
-      </select>
-      <input id="query" type="text" placeholder="e.g. What changed in revenue and liquidity?" autocomplete="off" />
+      <input id="query" type="text" placeholder="e.g. Which agreements have a change-of-control covenant?" autocomplete="off" />
       <button class="send-btn" type="submit">Ask</button>
     </form>
-    <p class="hint">Try: &ldquo;Summarize the latest filings&rdquo; &bull; &ldquo;What is the 10-year yield trend?&rdquo;</p>
+    <p class="hint">Try: &ldquo;Which agreements have a change-of-control covenant?&rdquo; &bull; &ldquo;Compare covenants across the agreements&rdquo; (Agent)</p>
   </div>
 </div>
 <script>
   const form     = document.getElementById('chat-form');
   const input    = document.getElementById('query');
-  const ticker   = document.getElementById('ticker');
   const messages = document.getElementById('messages');
   const btn      = form.querySelector('.send-btn');
 
@@ -342,11 +335,10 @@ def ui_page():
           body: JSON.stringify({ question: q })
         });
       } else {
-        const filter = ticker.value ? { ticker: ticker.value } : null;
         res = await fetch('/v1/query', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: q, top_k: 8, metadata_filter: filter })
+          body: JSON.stringify({ query: q, top_k: 8 })
         });
       }
       const data = await res.json();
