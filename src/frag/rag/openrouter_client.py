@@ -68,24 +68,23 @@ class OpenRouterClient:
         m = re.search(r"\{.*\}", text, re.DOTALL)
         return m.group(0) if m else text
 
-    def generate(self, prompt: str) -> str:
+    def _headers(self) -> dict[str, str]:
         if not self.api_key:
             raise RuntimeError("OPENROUTER_API_KEY is required")
-
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         # Optional attribution headers OpenRouter recommends; harmless if unset.
-        referer = os.getenv("OPENROUTER_REFERER")
-        title = os.getenv("OPENROUTER_TITLE")
-        if referer:
+        if referer := os.getenv("OPENROUTER_REFERER"):
             headers["HTTP-Referer"] = referer
-        if title:
+        if title := os.getenv("OPENROUTER_TITLE"):
             headers["X-Title"] = title
+        return headers
 
-        payload = self._build_payload(prompt)
-
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST to chat/completions with retry; record telemetry; return the JSON."""
+        headers = self._headers()
         url = f"{self.base}/chat/completions"
         with Timer() as t:
             r = request_with_retry(
@@ -98,5 +97,33 @@ class OpenRouterClient:
         self.last_latency_s = t.elapsed
         self.last_usage = data.get("usage")
         self.last_cost = cost_from_usage(self.model, self.last_usage)
+        return data
+
+    def generate(self, prompt: str) -> str:
+        data = self._post(self._build_payload(prompt))
         raw = data["choices"][0]["message"]["content"] or ""
         return self._clean(raw)
+
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict[str, Any]:
+        """Multi-message call with native function-calling; returns the assistant message.
+
+        The returned dict has `content` (str | None) and `tool_calls` (a list of
+        {id, name, arguments} — arguments is the raw JSON string the model emitted).
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": float(os.getenv("OPENROUTER_TEMPERATURE", "0")),
+        }
+        if tools:
+            payload["tools"] = tools
+        message = self._post(payload)["choices"][0]["message"]
+        calls = [
+            {
+                "id": c.get("id"),
+                "name": c.get("function", {}).get("name"),
+                "arguments": c.get("function", {}).get("arguments", "{}"),
+            }
+            for c in message.get("tool_calls") or []
+        ]
+        return {"content": message.get("content"), "tool_calls": calls}
