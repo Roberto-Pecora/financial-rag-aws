@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-import json
+import logging
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from frag.rag import prompts
+from frag.rag.llm_schemas import ActorResponse
 from frag.rag.openrouter_client import OpenRouterClient
+
+logger = logging.getLogger(__name__)
+
+_ABSTAIN = "Insufficient evidence retrieved."
 
 
 class LLMClient(Protocol):
@@ -34,23 +41,19 @@ class Actor:
 
     def act(self, query: str, contexts: list) -> dict:
         if not contexts:
-            raw = '{"answer":"Insufficient evidence retrieved.","citations":[]}'
-            return {"answer": "Insufficient evidence retrieved.", "citations": [], "raw": raw}
+            raw = f'{{"answer":"{_ABSTAIN}","citations":[]}}'
+            return {"answer": _ABSTAIN, "citations": [], "raw": raw}
 
+        # A transport/auth error here propagates deliberately: a failed call must
+        # not masquerade as a genuine "insufficient evidence" abstention.
         prompt = self.build_prompt(query, contexts)
         raw = self.client.generate(prompt)
 
+        # A malformed response is a logged abstention, not a silent one.
         try:
-            data = json.loads(raw)
-            answer = str(data.get("answer", "")).strip()
-            citations = data.get("citations", [])
-            if not isinstance(citations, list):
-                citations = []
-            citations = [str(c).strip() for c in citations]
-            return {"answer": answer, "citations": citations, "raw": raw}
-        except Exception:
-            return {
-                "answer": "Insufficient evidence retrieved.",
-                "citations": [],
-                "raw": raw,
-            }
+            resp = ActorResponse.model_validate_json(raw)
+        except ValidationError as exc:
+            logger.warning("actor response malformed (%s); abstaining. raw=%.200r", exc, raw)
+            return {"answer": _ABSTAIN, "citations": [], "raw": raw}
+
+        return {"answer": resp.answer, "citations": resp.citations, "raw": raw}

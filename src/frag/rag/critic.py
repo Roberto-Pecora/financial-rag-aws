@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-import json
+import logging
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from frag.rag import prompts
+from frag.rag.llm_schemas import CriticResponse
 from frag.rag.openrouter_client import OpenRouterClient
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient(Protocol):
@@ -35,30 +40,24 @@ class Critic:
         if not contexts:
             return {"score": 0.0, "notes": "No evidence available."}
 
+        # A transport/auth error here propagates: a failed critic call must not be
+        # confused with a genuine low score. A malformed *response* fails closed
+        # (score 0.0 -> veto), which is the safe default for a risk gate, but is
+        # logged so it is visible rather than silent.
         prompt = self.build_prompt(query, contexts, answer, citations)
         text = self.client.generate(prompt)
 
         try:
-            data = json.loads(text.strip())
-            overall = float(data.get("overall_score", 0.0))
-            faithfulness = float(data.get("faithfulness_score", 0.0))
-            completeness = float(data.get("completeness_score", 0.0))
-            citation_score = float(data.get("citation_score", 0.0))
-            issues = data.get("issues", [])
-            if not isinstance(issues, list):
-                issues = [str(issues)]
+            resp = CriticResponse.model_validate_json(text.strip())
+        except ValidationError as exc:
+            logger.warning("critic response malformed (%s); vetoing. raw=%.200r", exc, text)
+            return {"score": 0.0, "notes": "Critic response malformed; vetoed."}
 
-            notes_parts = [
-                f"faithfulness={faithfulness:.2f}",
-                f"completeness={completeness:.2f}",
-                f"citations={citation_score:.2f}",
-            ]
-            if issues:
-                notes_parts.append("issues: " + " | ".join(str(i) for i in issues))
-
-            return {
-                "score": overall,
-                "notes": "; ".join(notes_parts),
-            }
-        except Exception:
-            return {"score": 0.0, "notes": "Critic failed to parse JSON."}
+        notes_parts = [
+            f"faithfulness={resp.faithfulness_score:.2f}",
+            f"completeness={resp.completeness_score:.2f}",
+            f"citations={resp.citation_score:.2f}",
+        ]
+        if resp.issues:
+            notes_parts.append("issues: " + " | ".join(resp.issues))
+        return {"score": resp.overall_score, "notes": "; ".join(notes_parts)}
