@@ -13,11 +13,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Set up Python
         run: uv python install 3.11
-      - name: Install (package + dev extras)
-        run: |
-          uv venv
-          uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Install (locked; fails if uv.lock is stale)
+        run: uv sync --frozen --extra dev
       - name: Ruff
-        run: .venv/bin/ruff check src tests scripts
+        run: uv run --no-sync ruff check src tests scripts
       - name: Pytest
-        run: .venv/bin/python -m pytest -q
+        run: uv run --no-sync pytest -q

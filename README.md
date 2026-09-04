@@ -85,10 +85,11 @@ OpenSearch and from a local model to OpenRouter changed no downstream code.
 ### 1. Install
 
 ```bash
-uv venv --python 3.11 && source .venv/bin/activate
-uv pip install -e ".[dev,eval]"
-cp .env.example .env   # fill in keys as needed
+uv sync --frozen --extra dev --extra eval   # exact versions from uv.lock
+cp .env.example .env                         # fill in keys as needed
 ```
+
+Add `--extra data`/`--extra kg`/`--extra efficient` for corpus, KG or quantised-search work. CI installs from the same lockfile, so local and CI environments match byte-for-byte.
 
 ### 2. Stand up the AWS data plane (free-tier)
 
