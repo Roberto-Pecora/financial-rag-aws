@@ -72,6 +72,10 @@ class AgentLoop:
                     "total_cost": total_cost,
                 }
 
+            # Capture any reasoning the model emitted alongside its tool calls.
+            if reply.get("content"):
+                trace.append({"turn": turn, "reasoning": reply["content"]})
+
             # Record the assistant turn that requested the tools, then answer each.
             messages.append(
                 {"role": "assistant", "content": reply.get("content"), "tool_calls": calls}

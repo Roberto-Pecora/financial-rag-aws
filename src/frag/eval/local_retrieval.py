@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from frag.eval.harness import evaluate
+from frag.rag.explain import attribute_rrf
 from frag.rag.store_qdrant import _reciprocal_rank_fusion
 
 
@@ -115,5 +116,7 @@ class LocalHybridIndex:
         out = []
         for i in ranked:
             r = self._records[int(i)]
-            out.append({"text": r["text"], "metadata": r.get("metadata", {}), "score": fused[i]})
+            attribution = attribute_rrf(i, dense_rank, bm25_rank)
+            meta = {**r.get("metadata", {}), "_attribution": attribution}
+            out.append({"text": r["text"], "metadata": meta, "score": fused[i]})
         return out

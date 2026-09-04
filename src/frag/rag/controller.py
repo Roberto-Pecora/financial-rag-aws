@@ -8,6 +8,7 @@ from frag.agent.guardrails import screen_input, screen_output
 from frag.rag.actor import Actor
 from frag.rag.actor import _doc_id as actor_doc_id
 from frag.rag.critic import Critic
+from frag.rag.explain import ground_answer
 
 
 class DocumentStore(Protocol):
@@ -173,7 +174,9 @@ class RagController:
         )
 
     def _guard_output(self, payload: dict[str, Any], contexts: list) -> dict[str, Any]:
-        """Downgrade an accepted answer to abstained if it fails the output guardrail."""
+        """Ground the answer, then downgrade to abstained if it fails the output guardrail."""
+        # Explainability: which retrieved passage supports each fact in the answer.
+        payload["grounding"] = ground_answer(payload["answer"], contexts, actor_doc_id)
         if payload["status"] != "accepted":
             return payload
         labels = {actor_doc_id(c, i) for i, c in enumerate(contexts)}

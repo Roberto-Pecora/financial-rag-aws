@@ -71,6 +71,21 @@ def test_controller_refuses_injection_before_llm():
     assert out["status"] == "refused" and out["results"] == []
 
 
+def test_controller_attaches_grounding():
+    from frag.rag.actor import Actor
+    from frag.rag.controller import RagController
+
+    class _Actor(Actor):
+        def act(self, query, contexts):
+            return {"answer": "Revenue was 5,678.", "citations": ["ACME_10K"], "raw": ""}
+
+    ctrl = RagController(store=_Store())
+    ctrl.actor = _Actor(llm_client=type("L", (), {"generate": lambda s, p: "{}"})())
+    out = ctrl.answer_with_critique("what was revenue?")
+    assert out["grounding"]["grounded_facts"] == 1
+    assert out["grounding"]["facts"][0]["supported_by"] == ["ACME_10K"]
+
+
 def test_agent_loop_refuses_injection_before_llm():
     from frag.agent.loop import AgentLoop
     from frag.agent.tools import ToolRegistry, make_calc_tool

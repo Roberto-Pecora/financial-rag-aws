@@ -80,3 +80,12 @@ def test_unknown_tool_is_reported_not_crash():
     llm = _ScriptedLLM([_tool_call("nope", {"x": 1}), _answer("ok")])
     out = _loop(llm).run("q")
     assert out["status"] == "answered"
+
+
+def test_reasoning_alongside_tool_calls_is_traced():
+    call = _tool_call("financial_calc", {"expression": "1+1"})
+    call["content"] = "I should compute the ratio first."  # model reasons + calls a tool
+    llm = _ScriptedLLM([call, _answer("2")])
+    out = _loop(llm).run("q")
+    reasoning = [s["reasoning"] for s in out["trace"] if "reasoning" in s]
+    assert reasoning == ["I should compute the ratio first."]
