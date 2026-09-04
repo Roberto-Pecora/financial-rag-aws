@@ -8,6 +8,7 @@ from frag.agent.guardrails import screen_input, screen_output
 from frag.rag.actor import Actor
 from frag.rag.actor import _doc_id as actor_doc_id
 from frag.rag.critic import Critic
+from frag.rag.entity_filter import company_filter
 from frag.rag.explain import ground_answer
 
 
@@ -71,6 +72,18 @@ class RagController:
         self.critic = Critic() if self.use_critic else None
         self.min_score = float(os.getenv("CRITIC_MIN_SCORE", "0.8"))
 
+    def _entity_filter(self, query: str) -> dict[str, str] | None:
+        """A company filter derived from the query, if the store knows its companies."""
+        lister = getattr(self.store, "list_companies", None)
+        if lister is None:
+            return None
+        if not hasattr(self, "_companies"):
+            try:
+                self._companies = lister()
+            except Exception:
+                self._companies = []
+        return company_filter(query, self._companies)
+
     def prompt_versions(self) -> dict[str, int | None]:
         """Active prompt versions, for logging alongside eval metrics (A/B testing)."""
         return {
@@ -132,6 +145,8 @@ class RagController:
                 "results": [],
             }
 
+        # Entity-aware retrieval: constrain to the query's company when it names one.
+        metadata_filter = metadata_filter or self._entity_filter(query)
         contexts = self.store.search(query=query, top_k=top_k, metadata_filter=metadata_filter)
 
         actor_out = self.actor.act(query, contexts)

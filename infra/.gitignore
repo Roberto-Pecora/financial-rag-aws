@@ -6,3 +6,5 @@
 crash.log
 crash.*.log
 # Keep .terraform.lock.hcl committed (pins provider versions).
+tfplan
+*.tfplan

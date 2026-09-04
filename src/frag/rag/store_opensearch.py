@@ -85,9 +85,18 @@ def bm25_query(query: str, top_k: int, metadata_filter: dict[str, Any] | None) -
     return _wrap_filter(q, metadata_filter, top_k)
 
 
+# Fields indexed as analysed text carry a .keyword subfield; term filters must
+# target that subfield to match exactly.
+_TEXT_KEYWORD_FIELDS = {"company", "doc_name"}
+
+
+def _term_field(field: str) -> str:
+    return f"{field}.keyword" if field in _TEXT_KEYWORD_FIELDS else field
+
+
 def _wrap_filter(inner: dict, metadata_filter: dict[str, Any] | None, top_k: int) -> dict:
     if metadata_filter:
-        must = [inner] + [{"term": {k: v}} for k, v in metadata_filter.items()]
+        must = [inner] + [{"term": {_term_field(k): v}} for k, v in metadata_filter.items()]
         body_query = {"bool": {"must": must}}
     else:
         body_query = inner
@@ -203,6 +212,13 @@ class OpenSearchStore:
     def count(self) -> int:
         return int(self.client.count(index=self.index_name).get("count", 0))
 
+    def list_companies(self, size: int = 200) -> list[str]:
+        """Distinct indexed company names, for entity-aware query filtering."""
+        body = {"size": 0, "aggs": {"c": {"terms": {"field": "company.keyword", "size": size}}}}
+        resp = self.client.search(index=self.index_name, body=body)
+        buckets = resp.get("aggregations", {}).get("c", {}).get("buckets", [])
+        return [b["key"] for b in buckets if b["key"]]
+
 
 # --------------------------------------------------------------------------
 # Default AWS-signed client + embedder (constructed lazily, kept out of tests)
@@ -221,6 +237,8 @@ def _default_client(endpoint: str | None):
     region = os.getenv("AWS_REGION", "eu-north-1")
     session = boto3.Session(profile_name=os.getenv("AWS_PROFILE"), region_name=region)
     auth = AWSV4SignerAuth(session.get_credentials(), region, "es")
+    # A bulk of vector docs can exceed the 10s default on a small node, so raise
+    # the read timeout and retry transient timeouts.
     return OpenSearch(
         hosts=[{"host": host, "port": 443}],
         http_auth=auth,
@@ -228,6 +246,9 @@ def _default_client(endpoint: str | None):
         verify_certs=True,
         connection_class=RequestsHttpConnection,
         pool_maxsize=20,
+        timeout=int(os.getenv("OPENSEARCH_TIMEOUT", "60")),
+        max_retries=3,
+        retry_on_timeout=True,
     )
 
 
