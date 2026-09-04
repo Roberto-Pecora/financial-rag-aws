@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
+from frag.rag import prompts
 from frag.rag.openrouter_client import OpenRouterClient
 
 
@@ -21,28 +22,15 @@ def _doc_id(ctx: dict, idx: int) -> str:
 
 
 class Actor:
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(self, llm_client: LLMClient | None = None, prompt_version: int | None = None):
         self.client = llm_client or OpenRouterClient("ACTOR_MODEL")
+        version = prompt_version or prompts.resolve_version("actor", "ACTOR_PROMPT_VERSION")
+        self.prompt = prompts.get("actor", version)
+        self.prompt_version = self.prompt.version
 
     def build_prompt(self, query: str, contexts: list) -> str:
         evidence = "\n\n".join([f"[{_doc_id(c, i)}] {c['text']}" for i, c in enumerate(contexts)])
-        return (
-            "You are an investment research assistant.\n"
-            "Answer the question using ONLY the evidence provided.\n"
-            "Do not use outside knowledge.\n"
-            "Do not mention documents that do not support the claim.\n"
-            "Do not add market commentary unless explicitly supported by the evidence.\n"
-            "Return ONLY valid JSON with exactly these keys:\n"
-            '{ "answer": string, "citations": [string, ...] }\n'
-            "Rules:\n"
-            "- answer must be one concise paragraph or sentence.\n"
-            "- citations must be the doc label strings shown in the evidence (e.g. doc-1).\n"
-            "- cite only documents that directly support the answer.\n"
-            "- if evidence is insufficient, answer must be exactly: "
-            "Insufficient evidence retrieved.\n"
-            f"Question: {query}\n"
-            f"Evidence:\n{evidence}"
-        )
+        return self.prompt.render(query=query, evidence=evidence)
 
     def act(self, query: str, contexts: list) -> dict:
         if not contexts:

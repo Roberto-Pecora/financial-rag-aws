@@ -68,6 +68,13 @@ class RagController:
         self.critic = Critic() if self.use_critic else None
         self.min_score = float(os.getenv("CRITIC_MIN_SCORE", "0.8"))
 
+    def prompt_versions(self) -> dict[str, int | None]:
+        """Active prompt versions, for logging alongside eval metrics (A/B testing)."""
+        return {
+            "actor_prompt_version": self.actor.prompt_version,
+            "critic_prompt_version": self.critic.prompt_version if self.critic else None,
+        }
+
     # ------------------------------------------------------------------
     # Raw store operations
     # ------------------------------------------------------------------

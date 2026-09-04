@@ -11,6 +11,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from frag.eval.harness import evaluate
+from frag.rag import prompts
 from frag.rag.controller import RagController
 
 load_dotenv()
@@ -166,6 +167,13 @@ def cmd_finish(args: argparse.Namespace) -> None:
         mlflow.log_param("retrieval_mode", os.getenv("RETRIEVAL_MODE", "dense"))
         mlflow.log_param("actor_model", os.getenv("ACTOR_MODEL", ""))
         mlflow.log_param("critic_model", os.getenv("CRITIC_MODEL", ""))
+        # Prompt versions in use, so runs are comparable across prompt A/B tests.
+        mlflow.log_param(
+            "actor_prompt_version", prompts.resolve_version("actor", "ACTOR_PROMPT_VERSION")
+        )
+        mlflow.log_param(
+            "critic_prompt_version", prompts.resolve_version("critic", "CRITIC_PROMPT_VERSION")
+        )
         mlflow.log_param("chunk_size", os.getenv("CHUNK_SIZE", "600"))
         mlflow.log_param("chunk_overlap", os.getenv("CHUNK_OVERLAP", "100"))
         mlflow.log_param("chunk_strategy", os.getenv("CHUNK_STRATEGY", "window"))
