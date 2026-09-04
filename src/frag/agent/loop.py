@@ -41,6 +41,7 @@ class AgentLoop:
                 "answer": "Request blocked by the input guardrail.",
                 "status": "refused",
                 "trace": [],
+                "evidence": [],
                 "tool_calls": 0,
                 "total_cost": 0.0,
             }
@@ -51,6 +52,7 @@ class AgentLoop:
         ]
         specs = self.registry.specs()
         trace: list[dict[str, Any]] = []
+        evidence: list[dict[str, Any]] = []
         tool_calls_made = 0
         total_cost = 0.0
 
@@ -65,6 +67,7 @@ class AgentLoop:
                     "answer": reply.get("content") or "",
                     "status": "answered",
                     "trace": trace,
+                    "evidence": evidence,
                     "tool_calls": tool_calls_made,
                     "total_cost": total_cost,
                 }
@@ -75,9 +78,12 @@ class AgentLoop:
             )
             for call in calls:
                 if tool_calls_made >= self.max_tool_calls:
-                    return self._budget_stop(trace, tool_calls_made, total_cost, "max_tool_calls")
+                    return self._budget_stop(
+                        trace, evidence, tool_calls_made, total_cost, "max_tool_calls"
+                    )
                 tool_calls_made += 1
                 result = self._run_tool(call)
+                evidence.append({"text": result, "metadata": {"doc_id": f"{call.get('name')}"}})
                 trace.append(
                     {
                         "turn": turn,
@@ -90,7 +96,7 @@ class AgentLoop:
                     {"role": "tool", "tool_call_id": call.get("id"), "content": result}
                 )
 
-        return self._budget_stop(trace, tool_calls_made, total_cost, "max_turns")
+        return self._budget_stop(trace, evidence, tool_calls_made, total_cost, "max_turns")
 
     def _run_tool(self, call: dict[str, Any]) -> str:
         """Validate + run a tool; a bad call becomes an error message fed back once."""
@@ -108,12 +114,13 @@ class AgentLoop:
             logger.warning("tool %s bad args: %s", name, exc)
             return f"error: invalid arguments for {name}: {exc}"
 
-    def _budget_stop(self, trace, tool_calls_made, total_cost, reason) -> dict[str, Any]:
+    def _budget_stop(self, trace, evidence, tool_calls_made, total_cost, reason) -> dict[str, Any]:
         logger.warning("agent stopped on %s", reason)
         return {
             "answer": "Stopped before reaching an answer (budget exhausted).",
             "status": f"stopped:{reason}",
             "trace": trace,
+            "evidence": evidence,
             "tool_calls": tool_calls_made,
             "total_cost": total_cost,
         }
