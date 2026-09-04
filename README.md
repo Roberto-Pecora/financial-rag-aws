@@ -1,227 +1,262 @@
 # Financial RAG on AWS
 
-A financial retrieval-augmented research assistant over **messy source documents**
-— SEC filings, earnings PDFs, scanned reports — built around **trained retrieval**
-rather than an off-the-shelf embedding. Hybrid dense + BM25 search runs on a
-single free-tier **AWS OpenSearch** node; the embedding model and a cross-encoder
-reranker are **finetuned on the corpus itself**, and every configuration is scored
-by a deterministic, content-based evaluation harness.
+A retrieval-first financial research assistant for SEC filings, earnings reports, messy PDFs, tables, and scanned documents.
 
-It is a rebuild of the [actor-critic financial RAG](https://github.com/Hydaspex/actor-critic-financial-rag)
-prototype, keeping that project's eval harness and answer gate but closing its
-three gaps: no messy/PDF ingestion, no *trained* IR models, and no cloud.
+The system combines corpus-trained dense retrieval, BM25, Reciprocal Rank Fusion (RRF), and cross-encoder reranking. It answers only from retrieved evidence, cites supporting chunks, and abstains when the evidence is insufficient.
 
+It is designed for research on published financial data, not investment advice.
+
+> The goal is not to use the best model on a public leaderboard. It is to measure and improve retrieval on the documents that matter.
+
+```text
+PDF / SEC HTML / scans
+        │
+        ▼
+Text extraction · table linearisation · OCR
+        │
+        ▼
+Canonical chunks with stable content-hash IDs
+        │
+        ▼
+S3 corpus + OpenSearch index
+        │
+        ▼
+Dense k-NN + BM25 → RRF → cross-encoder reranker
+        │
+        ▼
+Answer with citations, or abstain
 ```
-PDF / SEC HTML / scan        manifest (idempotent)        AWS data plane
-        │                          │                           │
-   text · tables · OCR ──► canonical chunk records ──► S3 corpus + OpenSearch
-        │                                                      │  dense k-NN + BM25
-   pymupdf / pdfplumber / Textract                             ▼
-                                                        RRF fusion ──► cross-encoder rerank
-                                                                              │
-                                                                actor (cite or abstain)
-                                                                      · optional critic gate
-```
 
-The system researches published financial data and must abstain when the
-retrieved evidence is insufficient. It is not investment advice.
+## Why retrieval-first?
 
-## Why this exists
+Embedding benchmarks do not guarantee performance on a specific financial corpus. In the predecessor prototype, `bge-small` underperformed `all-MiniLM-L6-v2` on dense financial tables, while hybrid dense-plus-BM25 retrieval delivered the largest improvement.
 
-An embedding that tops a public retrieval leaderboard does not transfer
-unconditionally to a specific corpus — the predecessor project found a "stronger"
-model (`bge-small`) *underperforming* a weaker one on dense financial tables. The
-lesson is that retrieval quality on your own documents is an engineering result
-you earn, not a model you download. This project treats retrieval as the primary
-problem: it ingests the messy documents real desks actually hold, mines training
-data from the corpus, finetunes both retrieval-stage models, and measures each
-change against a fixed golden set instead of trusting a leaderboard.
+This project treats retrieval as a measurable engineering problem:
 
-## What it demonstrates
+- Ingest the messy documents analysts actually use
+- Create training pairs from the corpus itself
+- Fine-tune the embedding model and reranker
+- Evaluate every change against a fixed golden set
+- Separate retrieval metrics from LLM answer quality
 
-- **Messy ingestion:** text-layer PDFs (`pymupdf`), financial tables linearised
-  as `label: value` pairs (`pdfplumber`), and scanned pages via **AWS Textract**,
-  all normalised into one canonical chunk schema with a per-path tag.
-- **Knowledge graph:** hybrid entity/covenant extraction (deterministic gazetteer + schema-guided
-  LLM) into a property graph, with a **graphRAG** retriever that walks issuer→instrument→covenant —
-  the structured-accuracy lever, not just chunk retrieval.
-- **Trained retrieval:** `bge-small` finetuned with `MultipleNegativesRankingLoss`,
-  and a cross-encoder reranker, both trained on **synthetic queries + mined hard
-  negatives** — no human labels.
-- **Hybrid search on managed AWS:** dense k-NN and BM25 in one OpenSearch index,
-  fused with Reciprocal Rank Fusion, provisioned and torn down by Terraform.
-- **Idempotent, batchable ingestion:** content-hash chunk ids make re-ingest a
-  no-op; stateless per-document functions parallelise without coordination.
-- **Data-centric evaluation:** content-based relevance (a chunk is a hit if it
-  contains the reference answer's facts), an ablation matrix over
-  {base vs finetuned} × {rerank off vs on}, tracked in MLflow.
-- **Cost discipline:** the whole AWS footprint is free-tier, Textract is spend-gated,
-  and teardown is one command.
+## Features
+
+| Area | What it does |
+|---|---|
+| Messy ingestion | Extracts text PDFs with `pymupdf`, linearises tables with `pdfplumber`, runs Textract OCR for scans, and normalises SEC HTML into one chunk schema |
+| Idempotent batch jobs | Uses content-hash IDs, so re-ingesting unchanged documents is a no-op and documents can be processed independently |
+| Trained retrieval | Fine-tunes `bge-small` with `MultipleNegativesRankingLoss`, using synthetic queries, positive pairs, and BM25-mined hard negatives |
+| Hybrid search | Runs dense k-NN and BM25 in one OpenSearch index, then combines results with RRF |
+| Reranking | Applies a corpus-trained cross-encoder to the fused candidate list |
+| graphRAG | Extracts issuer, instrument, and covenant relationships into a property graph for structured credit questions |
+| Grounded answers | The actor must cite retrieved evidence or abstain; an optional critic can apply a further risk gate |
+| Deterministic evaluation | Measures `recall@k`, `precision@k`, `MRR@k`, and `nDCG@k` from content-based relevance labels |
+| Cost control | Keeps persistent AWS services small, gates Textract, and provisions or tears down infrastructure with Terraform |
 
 ## Architecture
 
-The model never queries AWS directly; the application owns retrieval, reranking,
-and the answer gate.
+The application, not the LLM, controls retrieval, reranking, citations, and answer gating.
 
 | Component | Responsibility |
 |---|---|
-| `frag.sources` (pdf_text / pdf_tables / ocr_textract) | Messy documents → canonical `{id, text, metadata}` records |
-| `frag.jobs.ingest_manifest` | Idempotent, stateless batch ingestion → JSONL |
-| `frag.aws.s3_store` | S3 data lake I/O (corpus, artifacts, eval) |
-| `frag.rag.store_opensearch` | Managed hybrid store; dense k-NN + BM25 fused with RRF |
-| `frag.rag.reranker` | Cross-encoder reranking stage (RERANK=on) |
-| `frag.kg` | Entity/covenant extraction, property graph, graphRAG retriever |
-| `frag.train` | Pair mining, embedding finetune, reranker training |
-| `frag.rag.{actor,critic,controller}` | Grounded answer, optional risk gate, orchestration |
-| `frag.eval` | Content-based harness, in-memory eval, ablation matrix |
-| `infra/` | Terraform: S3 + OpenSearch + least-privilege IAM |
+| `frag.sources` | PDFs, tables, OCR, and SEC HTML to canonical chunks |
+| `frag.jobs.ingest_manifest` | Idempotent manifest-driven batch ingestion |
+| `frag.aws.s3_store` | Corpus, model artifacts, and evaluation data in S3 |
+| `frag.rag.store_opensearch` | Dense k-NN, BM25, and RRF hybrid retrieval |
+| `frag.rag.reranker` | Cross-encoder reranking |
+| `frag.kg` | Entity and covenant extraction, property graph, and graphRAG |
+| `frag.train` | Pair mining and retrieval-model training |
+| `frag.rag.{actor,critic,controller}` | Grounded answer generation, optional gate, and orchestration |
+| `frag.eval` | Exact in-memory evaluation and ablation runs |
+| `infra/` | Terraform for S3, OpenSearch, and least-privilege IAM |
 
-The retrieval `search()` contract (`{text, metadata, score}`) and the LLM
-`generate()` contract are held fixed across backends, so moving from Qdrant to
-OpenSearch and from a local model to OpenRouter changed no downstream code.
+All retrieval backends implement the same contract:
+
+```python
+search(query) -> [{"text": ..., "metadata": ..., "score": ...}]
+```
+
+This allows the application to switch between OpenSearch, a local store, or graphRAG without changing downstream answer-generation logic.
 
 ## Quick start
 
-### 1. Install
+### Install
 
 ```bash
-uv sync --frozen --extra dev --extra eval   # exact versions from uv.lock
-cp .env.example .env                         # fill in keys as needed
+uv sync --frozen --extra dev --extra eval
+cp .env.example .env
 ```
 
-Add `--extra data`/`--extra kg`/`--extra efficient` for corpus, KG or quantised-search work. CI installs from the same lockfile, so local and CI environments match byte-for-byte.
-
-### 2. Stand up the AWS data plane (free-tier)
+Install optional dependencies when needed:
 
 ```bash
-make infra-plan        # review the diff first
-make infra-up          # S3 + one t3.small.search OpenSearch node (~12 min)
-cd infra && terraform output   # -> S3_BUCKET, OPENSEARCH_ENDPOINT into .env
+uv sync --frozen --extra data --extra kg --extra efficient
 ```
 
-OpenSearch bills by the hour; `make infra-down` when finished.
-
-### 3. Build a corpus and index it
+### Provision AWS
 
 ```bash
-python scripts/build_corpus.py --out data/corpus.jsonl --s3-key corpus/corpus.jsonl
-STORE_BACKEND=opensearch python -c "from frag.rag.controller import RagController; import json; \
-  c=RagController(); print(c.ingest([json.loads(l) for l in open('data/corpus.jsonl')]))"
+make infra-plan
+make infra-up
+cd infra && terraform output
 ```
 
-### 4. Ask a question
+The AWS data plane consists of:
+
+- S3 for the corpus, training artifacts, and evaluation outputs
+- One small OpenSearch node for hybrid retrieval
+- AWS Textract only when OCR is required
+
+Add the Terraform outputs to `.env`, then tear down the infrastructure when finished:
 
 ```bash
-export OPENROUTER_API_KEY=...        # actor/critic run through OpenRouter
+make infra-down
+```
+
+### Build and index a corpus
+
+```bash
+python scripts/build_corpus.py \
+  --out data/corpus.jsonl \
+  --s3-key corpus/corpus.jsonl
+```
+
+```bash
+STORE_BACKEND=opensearch python -c "
+from frag.rag.controller import RagController
+import json
+
+controller = RagController()
+records = [json.loads(line) for line in open('data/corpus.jsonl')]
+print(controller.ingest(records))
+"
+```
+
+### Query the API
+
+```bash
+export OPENROUTER_API_KEY=...
 uvicorn frag.api.main:app --port 8000
-curl -s localhost:8000/v1/query -d '{"query":"What changed in revenue and liquidity?","top_k":5}'
 ```
 
-## Training the IR models
-
-Both trained models learn from the corpus, no labels. Run the mining locally,
-the fits on a Colab GPU (`notebooks/colab_train.ipynb`), and push the artifacts
-to S3.
-
 ```bash
-python scripts/mine_pairs.py --corpus data/corpus.jsonl --out data/pairs.jsonl   # OpenRouter
-python scripts/finetune_embedding.py --pairs data/pairs.jsonl --out artifacts/bge-ft
-python scripts/train_reranker.py    --pairs data/pairs.jsonl --out artifacts/reranker
+curl -s localhost:8000/v1/query \
+  -d '{"query":"What changed in revenue and liquidity?","top_k":5}'
 ```
 
-Hard negatives are mined with **BM25 on purpose** — lexically close distractors
-are exactly what a dense model ranks just below the answer, so mining them targets
-the failure the finetune is meant to fix.
+## Train on the corpus
 
-## Knowledge graph & graphRAG
-
-For credit work the structured graph is the accuracy lever: the answer to "what
-is the restricted-payments capacity" lives in issuer→instrument→covenant, not in
-a lucky chunk. Extraction is **hybrid** — a deterministic gazetteer for fixed
-entities (tickers, sponsors) plus schema-guided LLM extraction for covenants and
-relationships — and the graphRAG retriever expands the relevant sub-graph as
-cited context. It implements the same `search()` contract, so `STORE_BACKEND=graph`
-drops in with no downstream change.
+No manually labelled relevance dataset is required. The training pipeline generates synthetic questions and mines BM25 hard negatives: lexically similar chunks that are useful retrieval-stage distractors.
 
 ```bash
-python scripts/build_graph.py --corpus data/corpus.jsonl --out data/graph.json --gazetteer data/gazetteer.json
+python scripts/mine_pairs.py \
+  --corpus data/corpus.jsonl \
+  --out data/pairs.jsonl
+
+python scripts/finetune_embedding.py \
+  --pairs data/pairs.jsonl \
+  --out artifacts/bge-ft
+
+python scripts/train_reranker.py \
+  --pairs data/pairs.jsonl \
+  --out artifacts/reranker
+```
+
+Training can run locally or on a Colab GPU. Model artifacts can be stored in S3.
+
+## graphRAG
+
+Some financial questions require structured relationships rather than only a relevant paragraph. For example, restricted-payments capacity may require a path such as:
+
+```text
+Issuer → Instrument → Covenant → Exception → Capacity
+```
+
+The graph combines:
+
+- Deterministic entity extraction for stable entities such as issuers, sponsors, and tickers
+- Schema-guided LLM extraction for covenants, instruments, and financial relationships
+
+Its retriever returns the same `{text, metadata, score}` contract as standard chunk retrieval.
+
+```bash
+python scripts/build_graph.py \
+  --corpus data/corpus.jsonl \
+  --out data/graph.json \
+  --gazetteer data/gazetteer.json
 ```
 
 ## Evaluation
 
-Relevance is **content-based**: a retrieved chunk counts as a hit if its text
-contains the numeric facts asserted in the golden row's reference answer, so the
-golden set is independent of chunk boundaries and survives re-chunking. Metrics
-are deterministic (`recall@k`, `precision@k`, `MRR@k`, `nDCG@k`); the actor/critic
-are not in the retrieval-metric loop. The eval index is **exact** (brute-force), so
-reported accuracy carries zero ANN loss; production OpenSearch uses HNSW with a
-tunable `ef_search` for the accuracy-for-latency dial.
+Evaluation is deterministic and retrieval-focused.
 
-**Efficiency, measured not assumed.** Exact/HNSW float32 is the accuracy default.
-Quantised search (turbovec, 2/4-bit) is offered only as a first-stage recall with
-full-precision rescoring, and its cost is measured on our corpus — recall delta
-against memory and latency:
+A chunk counts as relevant when it contains the facts asserted in the golden answer, rather than when it matches a particular chunk ID. This makes the evaluation robust to changes in chunking strategy.
 
-```bash
-python scripts/run_index_ablation.py --corpus data/corpus.jsonl --bit-width 4
-```
+The exact in-memory evaluator reports:
 
-The ablation matrix sweeps the two trained models against their baselines:
+- `recall@k`
+- `precision@k`
+- `MRR@k`
+- `nDCG@k`
+
+Production OpenSearch uses HNSW, where `ef_search` controls the recall-versus-latency trade-off. Evaluation uses brute-force exact search, so reported retrieval accuracy excludes ANN approximation loss.
+
+### Ablations and benchmarks
+
+The ablation matrix compares base and fine-tuned embeddings, both with and without reranking. Each configuration reports mean ± standard deviation over repeated runs, p50/p95 retrieval latency, and estimated cost in MLflow.
 
 ```bash
-python scripts/run_ablation.py --corpus data/corpus.jsonl \
-    --base BAAI/bge-small-en-v1.5 --finetuned artifacts/bge-ft --reranker artifacts/reranker --repeats 5
+python scripts/run_ablation.py \
+  --corpus data/corpus.jsonl \
+  --base BAAI/bge-small-en-v1.5 \
+  --finetuned artifacts/bge-ft \
+  --reranker artifacts/reranker \
+  --repeats 5
 ```
-
-Each cell reports IR quality (mean ± sd over `--repeats`), retrieval+rerank
-latency (p50/p95 ms), and cost, logged to MLflow — so a quality gain is weighed
-against its latency, not read in isolation. End-to-end LLM latency and cost
-(computed from OpenRouter token usage × a price map) come from the bench:
 
 ```bash
-python scripts/bench_end_to_end.py --golden data/golden_seed.csv --repeats 3
+python scripts/run_index_ablation.py \
+  --corpus data/corpus.jsonl \
+  --bit-width 4
 ```
 
-### Results
+```bash
+python scripts/bench_end_to_end.py \
+  --golden data/golden_seed.csv \
+  --repeats 3
+```
 
-The harness, ablation runner, and MLflow tracking are in place; the headline
-numbers are produced by the command above once the models are trained, and are
-not reproduced here as invented figures. The starting point they build on is the
-predecessor project's documented baseline on the same style of corpus:
+Quantised 2-bit and 4-bit retrieval is treated as an optional first-stage recall mechanism, followed by full-precision rescoring. Its memory, latency, and recall impact are measured on the corpus rather than assumed.
 
-| Configuration | recall@10 | nDCG@10 |
-|---|--:|--:|
-| dense, base `bge-small` | 0.39 | 0.15 |
-| dense, `all-MiniLM-L6-v2` | 0.52 | 0.24 |
-| **hybrid (dense + BM25, RRF)** | **0.68** | **0.34** |
+## Starting baseline
 
-*(From the [actor-critic prototype](https://github.com/Hydaspex/actor-critic-financial-rag);
-hybrid was the decisive lever there. This project's finetune and reranker are the
-next two levers, measured by the ablation runner above.)*
+The repository includes the evaluation harness and ablation scripts, but it does not claim final fine-tuning or reranking results before training has been run.
 
-The design keeps two honest caveats visible rather than tuning them away: the
-critic score is a weak LLM-judge signal and is excluded from the retrieval
-metrics; and "scale" here means the pipeline is operated on free-tier infra and
-architected to extend, not run at production volume.
+The predecessor project reported the following starting point on a similar corpus:
 
-## AWS and cost
+| Configuration | Recall@10 | nDCG@10 |
+|---|---:|---:|
+| Dense, base `bge-small` | 0.39 | 0.15 |
+| Dense, `all-MiniLM-L6-v2` | 0.52 | 0.24 |
+| Hybrid dense + BM25 with RRF | 0.68 | 0.34 |
 
-Data plane on AWS, compute plane off it: S3 (corpus, artifacts, eval), a single
-free-tier OpenSearch node (hybrid search), and Textract (OCR) — while embedding
-finetuning, reranker training, and model serving run on Colab / locally. This
-keeps the whole footprint inside AWS Free Tier. See [`infra/README.md`](infra/README.md)
-for the teardown runbook and guardrails.
+Hybrid retrieval was the decisive initial improvement. Corpus-specific fine-tuning and cross-encoder reranking are the next levers, measured through the ablation runner.
 
 ## Development
 
 ```bash
-make test        # 104 tests, hermetic — no AWS, no GPU, no API key
-make check       # ruff lint + format
+make test
+make check
 ```
 
-The tests stub the store, the LLM, and AWS clients, so the full suite runs
-offline. Every billable path (Textract, OpenSearch) is gated or injectable.
+Tests are hermetic: stores, LLMs, and AWS clients are stubbed, so the suite runs without AWS, a GPU, or API keys.
+
+## Scope and limitations
+
+- The critic is an optional weak LLM-judge signal, not a retrieval metric.
+- The system is a low-cost, extensible research platform rather than a production-volume document-processing service.
+- OpenSearch and Textract are billable paths. Review Terraform plans and run `make infra-down` after use.
 
 ## License
 
-MIT.
+MIT
