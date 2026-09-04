@@ -90,24 +90,33 @@ def hybrid_extract(
     text: str,
     gazetteer: dict[str, dict[str, list[str]]] | None = None,
     llm: Any | None = None,
+    doc_id: str | None = None,
 ) -> tuple[list[Entity], list[Relation]]:
-    """Run the gazetteer (always) and the LLM (if provided); merge and dedupe."""
+    """Run the gazetteer (always) and the LLM (if provided); merge and dedupe.
+
+    `doc_id` stamps provenance onto every entity/relation so the graph can cite
+    which contract a covenant came from.
+    """
     entities: dict[str, Entity] = {}
     relations: list[Relation] = []
 
+    def _prov() -> dict[str, Any]:
+        return {"source_docs": [doc_id]} if doc_id else {}
+
     if gazetteer:
         for e in GazetteerExtractor(gazetteer).extract(text):
-            entities[e.id] = e
+            entities[e.id] = Entity(e.id, e.type, e.name, {**e.attrs, **_prov()})
 
     if llm is not None:
         llm_entities, llm_relations = LLMExtractor(llm).extract(text)
         for e in llm_entities:
-            entities.setdefault(e.id, e)
+            entities.setdefault(e.id, Entity(e.id, e.type, e.name, {**e.attrs, **_prov()}))
         # Resolve relation endpoints (names) to entity ids where we can.
         by_name = {e.name.lower(): e.id for e in entities.values()}
         for r in llm_relations:
             src_id = by_name.get(r.source.lower(), entity_id("Unknown", r.source))
             tgt_id = by_name.get(r.target.lower(), entity_id("Unknown", r.target))
-            relations.append(Relation(source=src_id, type=r.type, target=tgt_id, attrs=r.attrs))
+            attrs = {**r.attrs, **({"source_doc": doc_id} if doc_id else {})}
+            relations.append(Relation(source=src_id, type=r.type, target=tgt_id, attrs=attrs))
 
     return list(entities.values()), relations

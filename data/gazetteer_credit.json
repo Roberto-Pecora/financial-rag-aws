@@ -1,0 +1,27 @@
+{
+  "Covenant": {
+    "Restricted Payments": ["restricted payment", "restricted payments"],
+    "Change of Control": ["change of control", "change in control"],
+    "Limitation on Indebtedness": ["limitation on indebtedness", "incurrence of indebtedness", "additional indebtedness"],
+    "Limitation on Liens": ["limitation on liens", "negative pledge", "permitted liens"],
+    "Asset Sales": ["asset sale", "asset sales", "disposition of assets"],
+    "Anti-Assignment": ["anti-assignment", "no assignment", "not assign this agreement"],
+    "Governing Law": ["governing law", "governed by the laws"],
+    "Merger Restriction": ["consolidation, merger", "merger, consolidation"],
+    "Affiliate Transactions": ["transactions with affiliates", "affiliate transaction"],
+    "Exclusivity": ["exclusivity", "exclusive right"],
+    "Non-Compete": ["non-compete", "noncompetition", "shall not compete"],
+    "Most Favoured Nation": ["most favored nation", "most favoured nation", "most favored customer"],
+    "Termination for Convenience": ["termination for convenience"],
+    "Indemnification": ["indemnification", "indemnify and hold harmless"]
+  },
+  "Metric": {
+    "Leverage Ratio": ["leverage ratio", "net leverage", "total leverage"],
+    "Interest Coverage": ["interest coverage", "fixed charge coverage"],
+    "EBITDA": ["ebitda", "adjusted ebitda"]
+  },
+  "Event": {
+    "Event of Default": ["event of default", "events of default"],
+    "Prepayment": ["mandatory prepayment", "optional prepayment", "prepayment"]
+  }
+}

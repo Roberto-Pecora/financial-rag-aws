@@ -57,6 +57,17 @@ def test_llm_extractor_handles_bad_json():
     assert ex.LLMExtractor(llm=_FakeLLM("nope")).extract("x") == ([], [])
 
 
+def test_hybrid_extract_stamps_provenance():
+    """doc_id flows onto entities (source_docs) and relations (source_doc)."""
+    raw = '{"entities": [], "relations": [{"source":"Acme","type":"issues","target":"Notes"}]}'
+    ents, rels = ex.hybrid_extract(
+        "Acme is the sponsor.", gazetteer=_GAZ, llm=_FakeLLM(raw), doc_id="doc-1"
+    )
+    acme = next(e for e in ents if e.name == "Acme Corp")
+    assert acme.attrs["source_docs"] == ["doc-1"]
+    assert rels[0].attrs["source_doc"] == "doc-1"
+
+
 # -- graph -----------------------------------------------------------------
 
 
@@ -83,6 +94,15 @@ def test_graph_add_resolve_neighbours_subgraph():
     assert "Acme Corp issues 2031 Notes" in text
 
 
+def test_add_entity_unions_provenance_across_docs():
+    """The same covenant seen in two contracts accumulates both source docs."""
+    pg = PropertyGraph()
+    cid = entity_id("Covenant", "Change of Control")
+    pg.add_entity(Entity(cid, "Covenant", "Change of Control", {"source_docs": ["c1"]}))
+    pg.add_entity(Entity(cid, "Covenant", "Change of Control", {"source_docs": ["c2"]}))
+    assert pg.provenance(cid) == ["c1", "c2"]
+
+
 def test_graph_persistence_roundtrip(tmp_path):
     pg, *_ = _sample_graph()
     p = str(tmp_path / "g.json")
@@ -103,6 +123,18 @@ def test_graph_rag_search_returns_store_shape():
     assert {"text", "metadata", "score"} <= set(hits[0])
     assert hits[0]["metadata"]["source"] == "graph"
     assert "has_covenant" in hits[0]["text"]
+
+
+def test_graph_rag_hit_carries_provenance():
+    """A graphRAG hit cites the source docs of the resolved entity."""
+    pg = PropertyGraph()
+    did = entity_id("Instrument", "Loan Agreement")
+    cid = entity_id("Covenant", "Change of Control")
+    pg.add_entity(Entity(did, "Instrument", "Loan Agreement", {"source_docs": ["c1"]}))
+    pg.add_entity(Entity(cid, "Covenant", "Change of Control", {"source_docs": ["c1", "c2"]}))
+    pg.add_relation(Relation(did, "has_covenant", cid))
+    hits = gr.GraphRAGRetriever(pg).search("change of control", top_k=3)
+    assert hits and hits[0]["metadata"]["source_docs"] == ["c1", "c2"]
 
 
 def test_graph_rag_empty_query():

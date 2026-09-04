@@ -18,9 +18,13 @@ class PropertyGraph:
         self.g = nx.MultiDiGraph()
 
     def add_entity(self, e: Entity) -> None:
-        # Idempotent by id; merge attrs on repeat.
+        # Idempotent by id; merge attrs on repeat, unioning provenance.
         if self.g.has_node(e.id):
-            self.g.nodes[e.id]["attrs"].update(e.attrs)
+            attrs = self.g.nodes[e.id]["attrs"]
+            merged_docs = {*attrs.get("source_docs", []), *e.attrs.get("source_docs", [])}
+            attrs.update(e.attrs)
+            if merged_docs:
+                attrs["source_docs"] = sorted(merged_docs)
         else:
             self.g.add_node(e.id, type=e.type, name=e.name, attrs=dict(e.attrs))
 
@@ -37,6 +41,12 @@ class PropertyGraph:
             return None
         match = process.extractOne(name, names, scorer=fuzz.WRatio)
         return match[2] if match and match[1] >= threshold else None
+
+    def provenance(self, entity_id: str) -> list[str]:
+        """Source docs an entity was extracted from (for citations)."""
+        if entity_id not in self.g:
+            return []
+        return list(self.g.nodes[entity_id]["attrs"].get("source_docs", []))
 
     def neighbours(self, entity_id: str, depth: int = 1) -> set[str]:
         if entity_id not in self.g:

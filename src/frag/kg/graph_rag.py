@@ -43,6 +43,7 @@ class GraphRAGRetriever:
                         "doc_id": eid,
                         "entity": self.graph.g.nodes[eid]["name"],
                         "source": "graph",
+                        "source_docs": self.graph.provenance(eid),
                     },
                     "score": 1.0 / (rank + 1),
                 }
