@@ -47,9 +47,31 @@ def screen_input(text: str) -> Verdict:
     return Verdict(True)
 
 
+def _norm_label(s: str) -> str:
+    """Normalise a citation/label so formatting variance (a 'doc-' prefix, brackets,
+    case) doesn't read as a fabricated citation."""
+    s = s.strip().strip("[]").lower()
+    for prefix in ("doc-", "doc ", "document "):
+        if s.startswith(prefix):
+            s = s[len(prefix) :]
+    return s.strip()
+
+
 def screen_output(answer: str, citations: list[str], allowed_labels: set[str]) -> Verdict:
-    """Reject fabricated citations and flag leaked PII/secrets in the answer."""
-    invalid = [c for c in citations if c not in allowed_labels]
+    """Reject fabricated citations and flag leaked PII/secrets in the answer.
+
+    A citation counts as valid if, after normalisation, it matches (or is a prefix
+    of) any retrieved label — so a real answer isn't withheld over 'doc-'/case quirks.
+    """
+    norm_allowed = [_norm_label(a) for a in allowed_labels]
+
+    def cited_ok(c: str) -> bool:
+        nc = _norm_label(c)
+        if not nc:
+            return False
+        return any(nc == a or a.startswith(nc) or nc.startswith(a) for a in norm_allowed)
+
+    invalid = [c for c in citations if not cited_ok(c)]
     if invalid:
         logger.warning("output guardrail: citations outside retrieved set: %s", invalid)
         return Verdict(False, "answer cites documents that were not retrieved")

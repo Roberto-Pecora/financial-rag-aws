@@ -42,6 +42,12 @@ def test_screen_output_rejects_fabricated_citation():
     assert v.allowed is False
 
 
+def test_screen_output_tolerates_doc_prefix_and_case():
+    """A 'doc-'/case-formatted citation of a real label must not be withheld."""
+    v = g.screen_output("Revenue was 5,678.", ["doc-98CEAB7A"], {"98ceab7a4d1e"})
+    assert v.allowed is True  # 'doc-98ceab7a' is a prefix of the retrieved label
+
+
 def test_screen_output_flags_pii():
     v = g.screen_output("Reach us at cfo@acme.example", [], set())
     assert v.allowed is False
