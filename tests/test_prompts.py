@@ -19,18 +19,18 @@ class _FakeLLM:
         return self.raw
 
 
-def test_default_is_pinned_not_latest():
-    """Both roles ship >1 version, but the default stays v1 so adding v2 is opt-in."""
-    assert prompts.versions("actor") == [1, 2]
-    assert prompts.get("actor").version == 1
-    assert prompts.get("critic").version == 1
+def test_default_is_pinned_explicitly():
+    """Each role's default is pinned (v3, the format-accurate prompt), earlier versions kept."""
+    assert prompts.versions("actor") == [1, 2, 3]
+    assert prompts.get("actor").version == 3
+    assert prompts.get("critic").version == 3
 
 
 def test_resolve_version_reads_env(monkeypatch):
     monkeypatch.setenv("ACTOR_PROMPT_VERSION", "2")
     assert prompts.resolve_version("actor", "ACTOR_PROMPT_VERSION") == 2
     monkeypatch.delenv("ACTOR_PROMPT_VERSION")
-    assert prompts.resolve_version("actor", "ACTOR_PROMPT_VERSION") == 1  # falls back to default
+    assert prompts.resolve_version("actor", "ACTOR_PROMPT_VERSION") == 3  # falls back to default
 
 
 def test_render_keeps_literal_json_braces():
