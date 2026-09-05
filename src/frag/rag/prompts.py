@@ -254,3 +254,33 @@ register(
     ),
     default=True,
 )
+
+
+# -- corrective retrieval (grader + retrieval rewrite) ---------------------
+
+register(
+    PromptTemplate(
+        "grader",
+        1,
+        "You judge whether a retrieved passage is relevant to a question.\n"
+        "Relevant means it helps answer the question, not merely shares keywords.\n"
+        'Return ONLY JSON: { "relevant": true } or { "relevant": false }.\n'
+        "Question: $query\n\n"
+        "Passage:\n$passage",
+    ),
+    default=True,
+)
+
+register(
+    PromptTemplate(
+        "retrieval_rewrite",
+        1,
+        "Rewrite the question into a search query that retrieves better evidence: "
+        "expand abbreviations, add the specific financial term likely used in filings "
+        "(e.g. 'cash provided by operating activities' for 'operating cash flow'), and "
+        "keep any named entity.\n"
+        'Return ONLY JSON: { "query": "..." }.\n'
+        "Question: $query",
+    ),
+    default=True,
+)

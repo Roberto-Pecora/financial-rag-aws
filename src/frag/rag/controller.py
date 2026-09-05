@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Protocol
 
@@ -10,6 +11,9 @@ from frag.rag.actor import _doc_id as actor_doc_id
 from frag.rag.critic import Critic
 from frag.rag.entity_filter import company_filter
 from frag.rag.explain import ground_answer
+from frag.rag.grader import RetrievalGrader, RetrievalRewriter, corrective_enabled
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentStore(Protocol):
@@ -71,6 +75,29 @@ class RagController:
         self.use_critic = _critic_enabled()
         self.critic = Critic() if self.use_critic else None
         self.min_score = float(os.getenv("CRITIC_MIN_SCORE", "0.8"))
+        # Corrective retrieval (CRAG): built lazily, only if CORRECTIVE is on.
+        self.corrective = corrective_enabled()
+        self.grader = RetrievalGrader() if self.corrective else None
+        self.rewriter = RetrievalRewriter() if self.corrective else None
+        self.max_rewrites = int(os.getenv("CORRECTIVE_MAX_REWRITES", "2"))
+        self.min_relevant = int(os.getenv("CORRECTIVE_MIN_RELEVANT", "1"))
+
+    def _corrective_retrieve(self, query: str, top_k: int, metadata_filter) -> list[dict]:
+        """Retrieve, grade against the query, and rewrite-and-retry if too few relevant."""
+        contexts = self.store.search(query=query, top_k=top_k, metadata_filter=metadata_filter)
+        if self.grader is None:
+            return contexts
+        kept = self.grader.keep_relevant(query, contexts)
+        for _ in range(self.max_rewrites):
+            if len(kept) >= self.min_relevant:
+                break
+            rewritten = self.rewriter.rewrite(query)
+            logger.info("corrective retrieval: rewrote %r -> %r", query, rewritten)
+            contexts = self.store.search(
+                query=rewritten, top_k=top_k, metadata_filter=metadata_filter
+            )
+            kept = self.grader.keep_relevant(rewritten, contexts)
+        return kept or contexts  # fall back to raw hits rather than starving the actor
 
     def _entity_filter(self, query: str) -> dict[str, str] | None:
         """A company filter derived from the query, if the store knows its companies."""
@@ -147,7 +174,7 @@ class RagController:
 
         # Entity-aware retrieval: constrain to the query's company when it names one.
         metadata_filter = metadata_filter or self._entity_filter(query)
-        contexts = self.store.search(query=query, top_k=top_k, metadata_filter=metadata_filter)
+        contexts = self._corrective_retrieve(query, top_k, metadata_filter)
 
         actor_out = self.actor.act(query, contexts)
 
