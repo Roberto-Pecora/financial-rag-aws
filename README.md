@@ -29,7 +29,7 @@ Answer with citations, or abstain
 
 ## Why retrieval-first?
 
-Embedding benchmarks do not guarantee performance on a specific financial corpus. In the predecessor prototype, `bge-small` underperformed `all-MiniLM-L6-v2` on dense financial tables, while hybrid dense-plus-BM25 retrieval delivered the largest improvement.
+Embedding benchmarks do not guarantee performance on a specific financial corpus. Measured on FinanceBench, `bge-base` beat both the smaller `bge-small` and the larger `bge-large`: a bigger model did not help, and the mid-sized model won. In the predecessor prototype, `bge-small` underperformed `all-MiniLM-L6-v2` on dense financial tables, while hybrid dense-plus-BM25 retrieval delivered the largest improvement.
 
 This project treats retrieval as a measurable engineering problem:
 
@@ -45,11 +45,16 @@ This project treats retrieval as a measurable engineering problem:
 |---|---|
 | Messy ingestion | Extracts text PDFs with `pymupdf`, linearises tables with `pdfplumber`, runs Textract OCR for scans, and normalises SEC HTML into one chunk schema |
 | Idempotent batch jobs | Uses content-hash IDs, so re-ingesting unchanged documents is a no-op and documents can be processed independently |
-| Trained retrieval | Fine-tunes `bge-small` with `MultipleNegativesRankingLoss`, using synthetic queries, positive pairs, and BM25-mined hard negatives |
+| Trained retrieval | Fine-tunes `bge-base` with `MultipleNegativesRankingLoss`, using synthetic queries, positive pairs, and BM25-mined hard negatives |
 | Hybrid search | Runs dense k-NN and BM25 in one OpenSearch index, then combines results with RRF |
 | Reranking | Applies a corpus-trained cross-encoder to the fused candidate list |
+| Entity-aware retrieval | Derives a company filter from the query, so a question about one issuer does not drift onto similarly-worded passages about another |
 | graphRAG | Extracts issuer, instrument, and covenant relationships into a property graph for structured credit questions |
+| Corrective retrieval | Grades retrieved passages against the query and, if too few are relevant, rewrites the query and re-retrieves (CRAG-style, off by default) |
+| Agentic tool-loop | Routes multi-hop questions to a tool-using loop over retrieval, graph lookup, and calculation, under turn and tool-call budgets |
 | Grounded answers | The actor must cite retrieved evidence or abstain; an optional critic can apply a further risk gate |
+| Answer grounding | Maps each fact in the answer back to the passage that supports it, flagging any claim no retrieved passage grounds |
+| Injection defence | Wraps retrieved passages as untrusted data and screens input and output, so a poisoned document cannot redirect the model or fabricate a source |
 | Deterministic evaluation | Measures `recall@k`, `precision@k`, `MRR@k`, and `nDCG@k` from content-based relevance labels |
 | Cost control | Keeps persistent AWS services small, gates Textract, and provisions or tears down infrastructure with Terraform |
 
@@ -67,6 +72,10 @@ The application, not the LLM, controls retrieval, reranking, citations, and answ
 | `frag.kg` | Entity and covenant extraction, property graph, and graphRAG |
 | `frag.train` | Pair mining and retrieval-model training |
 | `frag.rag.{actor,critic,controller}` | Grounded answer generation, optional gate, and orchestration |
+| `frag.rag.grader` | Corrective retrieval: passage grading and query rewrite |
+| `frag.agent.{loop,tools}` | Tool-using loop over retrieval, graph lookup, and calculation, with budgets and a reasoning trace |
+| `frag.agent.{router,orchestrator}` | Routes a question to deterministic RAG or the tool-loop, rewrites follow-ups, and critic-gates the agent |
+| `frag.agent.guardrails` | Input and output screens for injection defence |
 | `frag.eval` | Exact in-memory evaluation and ablation runs |
 | `infra/` | Terraform for S3, OpenSearch, and least-privilege IAM |
 
@@ -186,6 +195,14 @@ python scripts/build_graph.py \
   --gazetteer data/gazetteer.json
 ```
 
+## Corrective retrieval
+
+When a query retrieves weak evidence, one more retrieval round is cheaper than a wrong answer. An LLM grades each retrieved passage against the query, and if too few are relevant, the query is rewritten (expanding abbreviations and adding the specific financial term a filing is likely to use) and re-retrieved. The grader fails open, so a parse error keeps evidence rather than starving the actor. It is off by default (`CORRECTIVE`) and adds an LLM call per passage when on.
+
+## Agentic path
+
+Most questions are a single lookup and go straight to deterministic RAG. A router sends multi-hop questions — comparisons, thresholds, questions that need retrieval and the graph together — to a tool-using loop instead. The loop calls retrieval, graph lookup, and a whitelisted calculator over provider-native function-calling, under turn and tool-call budgets, and records a reasoning trace. Its final answer passes through the same critic risk gate as the RAG path. Routing is deterministic by default; an LLM classifier sits behind `ROUTER_LLM`.
+
 ## Evaluation
 
 Evaluation is deterministic and retrieval-focused.
@@ -208,7 +225,7 @@ The ablation matrix compares base and fine-tuned embeddings, both with and witho
 ```bash
 python scripts/run_ablation.py \
   --corpus data/corpus.jsonl \
-  --base BAAI/bge-small-en-v1.5 \
+  --base BAAI/bge-base-en-v1.5 \
   --finetuned artifacts/bge-ft \
   --reranker artifacts/reranker \
   --repeats 5
@@ -228,6 +245,18 @@ python scripts/bench_end_to_end.py \
 
 Quantised 2-bit and 4-bit retrieval is treated as an optional first-stage recall mechanism, followed by full-precision rescoring. Its memory, latency, and recall impact are measured on the corpus rather than assumed.
 
+### Embedding model size
+
+Base embeddings were compared on FinanceBench (Colab GPU) to test the assumption that a larger model retrieves better.
+
+| Model | Params | recall@1 | recall@5 | recall@10 |
+|---|---:|---:|---:|---:|
+| `bge-small` | 33M | 0.050 | 0.107 | 0.227 |
+| **`bge-base`** | 109M | **0.084** | **0.175** | **0.245** |
+| `bge-large` | 335M | 0.060 | 0.109 | 0.218 |
+
+The mid-sized model wins: `bge-large` does not beat `bge-base` on this corpus. The live system uses `bge-base` as its base embedding.
+
 ## Starting baseline
 
 The repository includes the evaluation harness and ablation scripts, but it does not claim final fine-tuning or reranking results before training has been run.
@@ -241,6 +270,16 @@ The predecessor project reported the following starting point on a similar corpu
 | Hybrid dense + BM25 with RRF | 0.68 | 0.34 |
 
 Hybrid retrieval was the decisive initial improvement. Corpus-specific fine-tuning and cross-encoder reranking are the next levers, measured through the ablation runner.
+
+## Prompt-injection defence
+
+A RAG system over ingested documents is exposed to indirect prompt injection: the untrusted text is the retrieved passage itself. The defence is layered and mostly deterministic, so most of it runs without an API key.
+
+- Each retrieved passage is wrapped as untrusted data, with the delimiters sanitised so a document cannot forge or escape the markers. The actor and critic are told to treat the wrapped text as data, never as instructions.
+- An input screen blocks override and jailbreak attempts before any LLM call.
+- An output screen requires the answer's citations to be a subset of the retrieved labels, so a fabricated source downgrades the answer to an abstention.
+
+The defence is measured, not assumed: `scripts/eval_security.py` runs an authored set of poisoned-document and jailbreak cases and reports a defence rate, with the deterministic cases passing with no key.
 
 ## Development
 
